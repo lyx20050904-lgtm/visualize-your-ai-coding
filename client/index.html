@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vibe Guarding</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css?v=8">
+</head>
+<body>
+
+<!-- Top bar -->
+<header id="topbar">
+  <div class="logo">
+    <span class="logo-mark">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <line x1="8" y1="2" x2="8" y2="14"/>
+        <line x1="2" y1="8" x2="14" y2="8"/>
+        <line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/>
+        <line x1="12.2" y1="3.8" x2="3.8" y2="12.2"/>
+      </svg>
+    </span>
+    Vibe Guarding
+  </div>
+  <div class="topbar-actions">
+    <button id="btnOpenProject" class="btn btn-primary">
+      <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+      Open Project
+    </button>
+    <button id="btnOpenPrd" class="btn">
+      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Load PRD
+    </button>
+    <div class="status-group">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText" class="status-text">disconnected</span>
+    </div>
+    <input type="file" id="prdFileInput" accept=".md,.txt" style="display:none">
+  </div>
+</header>
+
+<!-- Main layout -->
+<div id="layout">
+  <!-- Left sidebar: project tree -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <h3>Project Tree</h3>
+      <input type="text" id="treeFilter" placeholder="Filter files..." class="filter-input">
+    </div>
+    <div id="treeContainer" class="tree-container"></div>
+  </aside>
+
+  <!-- Center: visualization -->
+  <main id="canvas">
+    <div id="graphContainer">
+      <svg id="graphSvg"></svg>
+      <div id="tooltip" class="tooltip hidden"></div>
+    </div>
+    <div id="emptyState" class="empty-state">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+          <circle cx="6" cy="6" r="2.5"/>
+          <circle cx="18" cy="8" r="2.5"/>
+          <circle cx="10" cy="18" r="2.5"/>
+          <circle cx="18" cy="18" r="2.5"/>
+          <line x1="8" y1="7.5" x2="16" y2="9.5"/>
+          <line x1="7.5" y1="8" x2="10.5" y2="16"/>
+          <line x1="16.5" y1="10.5" x2="16.5" y2="15.5"/>
+        </svg>
+      </div>
+      <h2>Open a project to start monitoring</h2>
+      <p>Click <strong>Open Project</strong> and select your vibe coding project directory.</p>
+    </div>
+  </main>
+
+  <!-- Right panel: details -->
+  <aside id="details">
+    <div class="details-tabs">
+      <button class="details-tab active" data-target="detailsContent">Details</button>
+      <button class="details-tab" data-target="prdPanel">PRD</button>
+    </div>
+    <div id="detailsContent" class="details-content details-panel active">
+      <p class="muted">Click a node to see details</p>
+    </div>
+    <div id="prdPanel" class="details-content details-panel"></div>
+  </aside>
+</div>
+
+<!-- Bottom bar: activity log -->
+<footer id="logbar">
+  <div class="log-header">
+    <span>Activity Log</span>
+    <div style="display:flex;gap:4px">
+      <button id="btnToggleLog" class="btn-small">Hide</button>
+      <button id="btnClearLog" class="btn-small">Clear</button>
+    </div>
+  </div>
+  <div id="logContainer" class="log-container"></div>
+</footer>
+
+<!-- Agent prompt modal -->
+<div id="promptModal" class="modal hidden">
+  <div class="modal-content">
+    <span class="modal-close" id="modalClose">&times;</span>
+    <h3>Suggested Prompt for Agent</h3>
+    <p>Copy this prompt and paste it into your AI coding agent to clarify the project structure:</p>
+    <textarea id="promptText" class="prompt-textarea" readonly></textarea>
+    <button id="btnCopyPrompt" class="btn btn-primary">
+      <svg viewBox="0 0 24 24" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+      Copy to Clipboard
+    </button>
+  </div>
+</div>
+
+<script src="/app.js?v=8"></script>
+<script src="/visualizer.js?v=8"></script>
+<script>document.addEventListener('DOMContentLoaded', () => new App());</script>
+</body>
+</html>
