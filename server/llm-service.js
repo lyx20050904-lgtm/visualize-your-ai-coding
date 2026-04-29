@@ -1,0 +1,296 @@
+/**
+ * LLM Service — Async semantic description generator
+ *
+ * Isolation contract:
+ *   - NEVER calls broadcast()
+ *   - NEVER modifies file-watcher state
+ *   - NEVER touches D3 / client state
+ *   - Only reads config, calls LLM API, reads/writes cache file
+ *   - Exposes: generateDescriptions(), getCachedDescriptions(), isReady()
+ */
+
+import fs from 'fs';
+import path from 'path';
+import https from 'https';
+
+const CONFIG_FILE = '.vibe-guarding.json';
+const CACHE_FILE = '.vibe-guarding-cache.json';
+const BATCH_SIZE = 50;
+const TIMEOUT_MS = 30000;
+
+// Base64 infrastructure file patterns to skip sending to LLM
+const INFRA_SKIP = [
+  /node_modules/, /\.git/, /dist/, /build/, /\.cache/,
+  /package-lock\.json/, /yarn\.lock/, /pnpm-lock\.yaml/,
+  /\.eslintrc/, /\.prettierrc/, /\.babelrc/,
+  /\.(test|spec)\.(js|ts|jsx|tsx)$/i,
+  /\.env/,
+];
+
+export class LlmService {
+  constructor(projectRoot) {
+    this.projectRoot = projectRoot;
+    this.config = null;
+    this.cache = {};
+    this._ready = false;
+    this._generating = false;
+    this._log = [];
+
+    this._loadConfig();
+    this._loadCache();
+  }
+
+  // ─── Config ───
+
+  _loadConfig() {
+    const configPath = path.join(this.projectRoot, CONFIG_FILE);
+    if (!fs.existsSync(configPath)) {
+      this._addLog('info', 'No .vibe-guarding.json found. LLM descriptions disabled.');
+      return;
+    }
+    try {
+      const raw = fs.readFileSync(configPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed.llm && parsed.llm.apiKey && parsed.llm.provider) {
+        this.config = parsed.llm;
+        this._addLog('info', `LLM config loaded. Provider: ${this.config.provider}`);
+      } else {
+        this._addLog('warn', '.vibe-guarding.json missing llm.provider or llm.apiKey.');
+      }
+    } catch (e) {
+      this._addLog('error', `Failed to parse .vibe-guarding.json: ${e.message}`);
+    }
+  }
+
+  // ─── Cache ───
+
+  _loadCache() {
+    const cachePath = path.join(this.projectRoot, CACHE_FILE);
+    if (fs.existsSync(cachePath)) {
+      try {
+        this.cache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+        this._ready = Object.keys(this.cache).length > 0;
+        this._addLog('info', `Cache loaded: ${Object.keys(this.cache).length} descriptions.`);
+      } catch (e) {
+        this.cache = {};
+      }
+    }
+  }
+
+  _saveCache() {
+    const cachePath = path.join(this.projectRoot, CACHE_FILE);
+    try {
+      fs.writeFileSync(cachePath, JSON.stringify(this.cache, null, 2), 'utf-8');
+    } catch (e) {
+      this._addLog('error', `Cache write failed: ${e.message}`);
+    }
+  }
+
+  // ─── Public API ───
+
+  isReady() { return this._ready; }
+  isGenerating() { return this._generating; }
+  isEnabled() { return !!this.config; }
+
+  getCachedDescriptions() {
+    return { ...this.cache };
+  }
+
+  getLogs() {
+    return [...this._log];
+  }
+
+  /**
+   * Trigger async generation. Non-blocking — caller should not await.
+   * @param {Array} nodes - analysis nodes from ProjectAnalyzer
+   */
+  async generateDescriptions(nodes) {
+    if (!this.config) return;
+    if (this._generating) return;
+
+    // Filter to business files only
+    const targets = nodes.filter((n) => {
+      if (n.type === 'directory') return false;
+      if (INFRA_SKIP.some((re) => re.test(n.path))) return false;
+      if (this.cache[n.path]) return false; // already cached
+      return true;
+    });
+
+    if (targets.length === 0) {
+      this._ready = true;
+      this._addLog('info', 'All descriptions already cached. Skipping LLM call.');
+      return;
+    }
+
+    this._generating = true;
+    this._addLog('info', `Generating descriptions for ${targets.length} files...`);
+
+    // Process in batches
+    const batches = [];
+    for (let i = 0; i < targets.length; i += BATCH_SIZE) {
+      batches.push(targets.slice(i, i + BATCH_SIZE));
+    }
+
+    for (const batch of batches) {
+      try {
+        const result = await this._callLlm(batch);
+        if (result) {
+          for (const item of result) {
+            if (item.path && item.human_name) {
+              this.cache[item.path] = {
+                human_name: item.human_name,
+                metaphor_desc: item.metaphor_desc || '',
+              };
+            }
+          }
+          this._saveCache();
+        }
+      } catch (e) {
+        this._addLog('error', `Batch failed: ${e.message}`);
+      }
+    }
+
+    this._generating = false;
+    this._ready = true;
+    this._addLog('info', `Done. ${Object.keys(this.cache).length} total descriptions cached.`);
+  }
+
+  // ─── LLM Call ───
+
+  async _callLlm(batch) {
+    const prompt = this._buildPrompt(batch);
+
+    if (this.config.provider === 'openai') {
+      return this._callOpenAI(prompt);
+    } else if (this.config.provider === 'anthropic') {
+      return this._callAnthropic(prompt);
+    } else {
+      this._addLog('error', `Unknown provider: ${this.config.provider}`);
+      return null;
+    }
+  }
+
+  _buildPrompt(nodes) {
+    const fileList = nodes.map((n) =>
+      `- path: "${n.path}", role: "${n.role}", name: "${n.name}"`
+    ).join('\n');
+
+    return `You are a patient coding mentor. Explain software files to non-technical users using simple metaphors.
+
+Given this file list:
+${fileList}
+
+For each file, generate a short plain-language description (no technical jargon, max 20 Chinese characters or 12 English words).
+
+Return ONLY valid JSON matching this exact schema, no extra text:
+{
+  "mappings": [
+    {"path": "client/app.js", "human_name": "应用大脑", "metaphor_desc": "协调各功能模块的核心调度者"}
+  ]
+}`;
+  }
+
+  _callOpenAI(prompt) {
+    return new Promise((resolve, reject) => {
+      const model = this.config.model || 'gpt-4o-mini';
+      const body = JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+      });
+
+      const options = {
+        hostname: 'api.openai.com',
+        path: '/v1/chat/completions',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+
+      this._request(options, body, resolve, reject);
+    });
+  }
+
+  _callAnthropic(prompt) {
+    return new Promise((resolve, reject) => {
+      const model = this.config.model || 'claude-haiku-4-5-20251001';
+      const body = JSON.stringify({
+        model,
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: prompt }],
+      });
+
+      const options = {
+        hostname: 'api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.config.apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+
+      this._request(options, body, resolve, reject, 'anthropic');
+    });
+  }
+
+  _request(options, body, resolve, reject, provider = 'openai') {
+    const timer = setTimeout(() => {
+      req.destroy();
+      reject(new Error('LLM request timeout (30s)'));
+    }, TIMEOUT_MS);
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        clearTimeout(timer);
+        try {
+          const json = JSON.parse(data);
+          let content = '';
+          if (provider === 'anthropic') {
+            content = json.content?.[0]?.text || '';
+          } else {
+            content = json.choices?.[0]?.message?.content || '';
+          }
+
+          if (!content) {
+            reject(new Error('Empty LLM response'));
+            return;
+          }
+
+          // Parse JSON — handle markdown code fences
+          const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
+          const parsed = JSON.parse(cleaned);
+          resolve(parsed.mappings || []);
+        } catch (e) {
+          reject(new Error(`Parse error: ${e.message}`));
+        }
+      });
+    });
+
+    req.on('error', (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+
+    req.write(body);
+    req.end();
+  }
+
+  // ─── Internal log ───
+
+  _addLog(level, msg) {
+    const entry = { level, msg, ts: new Date().toISOString() };
+    this._log.push(entry);
+    if (this._log.length > 100) this._log.shift();
+    const prefix = level === 'error' ? '\x1b[31m' : level === 'warn' ? '\x1b[33m' : '\x1b[90m';
+    console.log(`${prefix}  [llm] ${msg}\x1b[0m`);
+  }
+}

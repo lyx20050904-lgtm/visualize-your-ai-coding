@@ -7,116 +7,143 @@
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 
-<!-- Top bar -->
+<!-- ── Top Bar ── -->
 <header id="topbar">
-  <div class="logo">
-    <span class="logo-mark">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-        <line x1="8" y1="2" x2="8" y2="14"/>
-        <line x1="2" y1="8" x2="14" y2="8"/>
-        <line x1="3.8" y1="3.8" x2="12.2" y2="12.2"/>
-        <line x1="12.2" y1="3.8" x2="3.8" y2="12.2"/>
+  <div class="topbar-left">
+    <div class="logo">
+      <svg class="logo-icon" viewBox="0 0 20 20" fill="none">
+        <circle cx="10" cy="10" r="2.5" fill="currentColor"/>
+        <circle cx="3"  cy="5"  r="1.8" fill="currentColor" opacity=".6"/>
+        <circle cx="17" cy="5"  r="1.8" fill="currentColor" opacity=".6"/>
+        <circle cx="3"  cy="15" r="1.8" fill="currentColor" opacity=".6"/>
+        <circle cx="17" cy="15" r="1.8" fill="currentColor" opacity=".6"/>
+        <line x1="10" y1="10" x2="3"  y2="5"  stroke="currentColor" stroke-width="1" opacity=".4"/>
+        <line x1="10" y1="10" x2="17" y2="5"  stroke="currentColor" stroke-width="1" opacity=".4"/>
+        <line x1="10" y1="10" x2="3"  y2="15" stroke="currentColor" stroke-width="1" opacity=".4"/>
+        <line x1="10" y1="10" x2="17" y2="15" stroke="currentColor" stroke-width="1" opacity=".4"/>
       </svg>
-    </span>
-    Vibe Guarding
-  </div>
-  <div class="topbar-actions">
-    <button id="btnOpenProject" class="btn btn-primary">
-      <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-      Open Project
-    </button>
-    <button id="btnOpenPrd" class="btn">
-      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-      Load PRD
-    </button>
-    <div class="status-group">
-      <span class="status-dot" id="statusDot"></span>
-      <span id="statusText" class="status-text">disconnected</span>
+      <span class="logo-text">Vibe Guarding</span>
     </div>
-    <input type="file" id="prdFileInput" accept=".md,.txt" style="display:none">
+  </div>
+
+  <div class="topbar-center">
+    <div class="project-input-wrap" id="projectInputWrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+      </svg>
+      <input type="text" id="projectPathInput" placeholder="Paste absolute project path and press Enter…" autocomplete="off" spellcheck="false"/>
+      <button id="btnOpenProject" class="btn-open">Open</button>
+    </div>
+  </div>
+
+  <div class="topbar-right">
+    <!-- View toggle -->
+    <div class="view-toggle" id="viewToggle" title="Switch view">
+      <button class="view-btn active" data-view="dev" title="Developer view — all files">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+        </svg>
+      </button>
+      <button class="view-btn" data-view="simple" title="Simple view — business files only">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Connection status -->
+    <div class="status-pill" id="statusPill">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">disconnected</span>
+    </div>
   </div>
 </header>
 
-<!-- Main layout -->
+<!-- ── Main Layout ── -->
 <div id="layout">
-  <!-- Left sidebar: project tree -->
+
+  <!-- Left: File Tree -->
   <aside id="sidebar">
     <div class="sidebar-header">
-      <h3>Project Tree</h3>
-      <input type="text" id="treeFilter" placeholder="Filter files..." class="filter-input">
+      <span class="sidebar-title">Files</span>
+      <input type="text" id="treeFilter" placeholder="Filter…" class="filter-input">
     </div>
     <div id="treeContainer" class="tree-container"></div>
   </aside>
 
-  <!-- Center: visualization -->
+  <!-- Center: Graph -->
   <main id="canvas">
     <div id="graphContainer">
       <svg id="graphSvg"></svg>
       <div id="tooltip" class="tooltip hidden"></div>
     </div>
+
+    <!-- Empty state -->
     <div id="emptyState" class="empty-state">
       <div class="empty-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
-          <circle cx="6" cy="6" r="2.5"/>
-          <circle cx="18" cy="8" r="2.5"/>
-          <circle cx="10" cy="18" r="2.5"/>
-          <circle cx="18" cy="18" r="2.5"/>
-          <line x1="8" y1="7.5" x2="16" y2="9.5"/>
-          <line x1="7.5" y1="8" x2="10.5" y2="16"/>
-          <line x1="16.5" y1="10.5" x2="16.5" y2="15.5"/>
+        <svg viewBox="0 0 80 80" fill="none">
+          <circle cx="40" cy="40" r="22" stroke="currentColor" stroke-width="1.5" opacity=".15"/>
+          <circle cx="40" cy="18" r="5" stroke="currentColor" stroke-width="1.5" opacity=".5"/>
+          <circle cx="62" cy="52" r="5" stroke="currentColor" stroke-width="1.5" opacity=".5"/>
+          <circle cx="18" cy="52" r="5" stroke="currentColor" stroke-width="1.5" opacity=".5"/>
+          <line x1="40" y1="23" x2="40" y2="18" stroke="currentColor" stroke-width="1" opacity=".3"/>
+          <line x1="57" y1="49" x2="62" y2="47" stroke="currentColor" stroke-width="1" opacity=".3"/>
+          <line x1="23" y1="49" x2="18" y2="47" stroke="currentColor" stroke-width="1" opacity=".3"/>
         </svg>
       </div>
       <h2>Open a project to start monitoring</h2>
-      <p>Click <strong>Open Project</strong> and select your vibe coding project directory.</p>
+      <p>Paste the absolute path to your project directory in the top bar and press Enter.</p>
+      <div class="empty-hint">
+        <code>/Users/you/my-project</code>
+      </div>
     </div>
   </main>
 
-  <!-- Right panel: details -->
+  <!-- Right: Details Panel -->
   <aside id="details">
-    <div class="details-tabs">
-      <button class="details-tab active" data-target="detailsContent">Details</button>
-      <button class="details-tab" data-target="prdPanel">PRD</button>
+    <div class="details-header">
+      <span class="details-title">Details</span>
+      <div class="llm-status" id="llmStatus" style="display:none">
+        <span class="llm-dot" id="llmDot"></span>
+        <span id="llmStatusText">AI descriptions loading…</span>
+      </div>
     </div>
-    <div id="detailsContent" class="details-content details-panel active">
-      <p class="muted">Click a node to see details</p>
+    <div id="detailsContent" class="details-content">
+      <div class="details-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32" opacity=".3">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <p>Click any node to inspect</p>
+      </div>
     </div>
-    <div id="prdPanel" class="details-content details-panel"></div>
   </aside>
+
 </div>
 
-<!-- Bottom bar: activity log -->
+<!-- ── Activity Log ── -->
 <footer id="logbar">
   <div class="log-header">
-    <span>Activity Log</span>
-    <div style="display:flex;gap:4px">
-      <button id="btnToggleLog" class="btn-small">Hide</button>
-      <button id="btnClearLog" class="btn-small">Clear</button>
+    <div class="log-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+      </svg>
+      Activity
+    </div>
+    <div class="log-actions">
+      <button id="btnClearLog" class="btn-tiny">Clear</button>
+      <button id="btnToggleLog" class="btn-tiny">Hide</button>
     </div>
   </div>
   <div id="logContainer" class="log-container"></div>
 </footer>
 
-<!-- Agent prompt modal -->
-<div id="promptModal" class="modal hidden">
-  <div class="modal-content">
-    <span class="modal-close" id="modalClose">&times;</span>
-    <h3>Suggested Prompt for Agent</h3>
-    <p>Copy this prompt and paste it into your AI coding agent to clarify the project structure:</p>
-    <textarea id="promptText" class="prompt-textarea" readonly></textarea>
-    <button id="btnCopyPrompt" class="btn btn-primary">
-      <svg viewBox="0 0 24 24" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-      Copy to Clipboard
-    </button>
-  </div>
-</div>
-
-<script src="/app.js?v=8"></script>
-<script src="/visualizer.js?v=8"></script>
+<script src="/app.js"></script>
+<script src="/visualizer.js"></script>
 <script>document.addEventListener('DOMContentLoaded', () => new App());</script>
 </body>
 </html>

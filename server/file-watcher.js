@@ -6,16 +6,29 @@ const IGNORE_PATTERNS = [
   /node_modules/, /\.git/, /\.next/, /\.cache/,
   /dist/, /build/, /\.turbo/, /\.nyc_output/,
   /coverage/, /\.vscode/, /\.idea/,
-  /\.DS_Store/, /yarn-error\.log/, /package-lock\.json/
+  /\.DS_Store/, /yarn-error\.log/, /package-lock\.json/,
+  /\.vibe-guarding-cache\.json/
 ];
+
+// Session debounce window: 500ms — consecutive changes within this window = 1 session
+const SESSION_DEBOUNCE_MS = 500;
 
 export class ProjectWatcher {
   constructor(root, broadcast) {
     this.root = root;
     this.broadcast = broadcast;
+
+    // Debounce timers for file events (structural: add/delete)
     this.debounceTimers = new Map();
+
+    // Per-file editing session tracking
+    // editingFiles: Set of relative paths currently in an editing session
     this.editingFiles = new Set();
-    this.editCounts = {};
+    // sessionTimers: Map of relative path → timeout handle (500ms session window)
+    this.sessionTimers = new Map();
+    // editSessionCounts: relative path → number of completed edit sessions
+    this.editSessionCounts = {};
+
     this._initialScanDone = false;
     this.watcher = null;
     this.start();
@@ -29,30 +42,25 @@ export class ProjectWatcher {
       persistent: true,
       ignoreInitial: false,
       depth: 12,
-      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 100 }
+      // awaitWriteFinish stabilizes rapid multi-write saves
+      awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 }
     });
 
     this.watcher
-      .on('add', (p) => {
-        this.debounce('add', p, 'file:added');
-      })
-      .on('change', (p) => {
-        // Immediately mark editing before debounce
-        this._markEditing(p);
-        this.debounce('change', p, 'file:changed');
-        this._trackEdit(p);
-      })
-      .on('unlink', (p) => this.debounce('unlink', p, 'file:deleted'))
-      .on('addDir', (p) => this.debounce('addDir', p, 'dir:added'))
-      .on('unlinkDir', (p) => this.debounce('unlinkDir', p, 'dir:deleted'))
-      .on('ready', () => {
+      .on('add',      (p) => { if (this._initialScanDone) this._debounce('add', p, 'file:added'); })
+      .on('change',   (p) => { this._handleChange(p); })
+      .on('unlink',   (p) => { this._debounce('unlink', p, 'file:deleted'); })
+      .on('addDir',   (p) => { if (this._initialScanDone) this._debounce('addDir', p, 'dir:added'); })
+      .on('unlinkDir',(p) => { this._debounce('unlinkDir', p, 'dir:deleted'); })
+      .on('ready',    ()  => {
         this._initialScanDone = true;
-        console.log(chalk.gray('  Initial scan complete, session tracking active'));
+        console.log(chalk.gray('  Initial scan complete. Edit session tracking active.'));
       })
-      .on('error', (e) => console.error(chalk.red('Watcher error:'), e));
+      .on('error',    (e) => console.error(chalk.red('Watcher error:'), e));
   }
 
-  debounce(eventType, filePath, eventName) {
+  // ─── Structural event debounce (add/delete) ───
+  _debounce(eventType, filePath, eventName) {
     const key = `${eventType}:${filePath}`;
     if (this.debounceTimers.has(key)) clearTimeout(this.debounceTimers.get(key));
     this.debounceTimers.set(key, setTimeout(() => {
@@ -61,31 +69,58 @@ export class ProjectWatcher {
       const ext = path.extname(filePath);
       console.log(chalk.gray(`  ${eventName}: ${relative}`));
       this.broadcast({ type: eventName, path: relative, fullPath: filePath, ext });
-      if (eventType === 'change') {
-        this.editingFiles.delete(relative);
-        this.broadcast({ type: 'agent:editing-end', path: relative });
-      }
     }, 300));
   }
 
-  /** Mark file as being edited — sends editing-start immediately */
-  _markEditing(filePath) {
-    const relative = path.relative(this.root, filePath);
-    if (!this.editingFiles.has(relative)) {
-      this.editingFiles.add(relative);
-      this.broadcast({ type: 'agent:editing-start', path: relative });
-    }
-  }
-
-  _trackEdit(filePath) {
+  // ─── Edit session logic ───
+  // Rule: consecutive change events within SESSION_DEBOUNCE_MS → same session
+  // When the session timer fires without a new change → session ends, count++
+  _handleChange(filePath) {
     if (!this._initialScanDone) return;
     const relative = path.relative(this.root, filePath);
-    this.editCounts[relative] = (this.editCounts[relative] || 0) + 1;
-    this.broadcast({ type: 'edit-counts:update', counts: { ...this.editCounts } });
+
+    // Start or extend session
+    if (!this.editingFiles.has(relative)) {
+      // New session begins
+      this.editingFiles.add(relative);
+      this.broadcast({ type: 'agent:editing-start', path: relative });
+      console.log(chalk.yellow(`  ✎ editing-start: ${relative}`));
+    }
+
+    // Broadcast change event for structural updates
+    this.broadcast({ type: 'file:changed', path: relative });
+
+    // Reset session timer
+    if (this.sessionTimers.has(relative)) {
+      clearTimeout(this.sessionTimers.get(relative));
+    }
+    this.sessionTimers.set(relative, setTimeout(() => {
+      this._endSession(relative);
+    }, SESSION_DEBOUNCE_MS));
   }
 
-  getEditCounts() {
-    return { ...this.editCounts };
+  _endSession(relative) {
+    this.sessionTimers.delete(relative);
+    if (!this.editingFiles.has(relative)) return;
+
+    this.editingFiles.delete(relative);
+
+    // Increment session count
+    this.editSessionCounts[relative] = (this.editSessionCounts[relative] || 0) + 1;
+
+    this.broadcast({ type: 'agent:editing-end', path: relative });
+    this.broadcast({
+      type: 'edit-counts:update',
+      counts: { ...this.editSessionCounts }
+    });
+
+    console.log(chalk.gray(
+      `  ✓ editing-end: ${relative} (session #${this.editSessionCounts[relative]})`
+    ));
+  }
+
+  getEditSessionCounts() {
+    return { ...this.editSessionCounts };
   }
 
   close() {
@@ -95,6 +130,8 @@ export class ProjectWatcher {
     }
     this.debounceTimers.forEach((t) => clearTimeout(t));
     this.debounceTimers.clear();
-    console.log(chalk.yellow('  Watcher stopped'));
+    this.sessionTimers.forEach((t) => clearTimeout(t));
+    this.sessionTimers.clear();
+    console.log(chalk.yellow('  Watcher stopped.'));
   }
 }

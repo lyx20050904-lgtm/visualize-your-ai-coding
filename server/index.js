@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { ProjectWatcher } from './file-watcher.js';
 import { ProjectAnalyzer } from './project-analyzer.js';
-import { PrdParser } from './prd-parser.js';
+import { LlmService } from './llm-service.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -15,12 +15,15 @@ const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-// --- State ---
+// ─── State ───
+// Module boundary: index.js owns WebSocket lifecycle + routing + broadcast()
+// index.js is FORBIDDEN from: awaiting LLM calls, calling llmService from broadcast()
 let projectRoot = null;
 let watcher = null;
 let analyzer = null;
+let llmService = null;
 
-// --- Helpers ---
+// ─── Broadcast (sync only — no async operations here) ───
 function broadcast(data) {
   const msg = JSON.stringify(data);
   wss.clients.forEach((client) => {
@@ -28,94 +31,104 @@ function broadcast(data) {
   });
 }
 
-// --- Middleware ---
+// ─── Middleware ───
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(join(ROOT, 'client')));
 
-// --- REST API ---
+// ─── REST: Project ───
 
-// Set / change project root
 app.post('/api/project/open', (req, res) => {
   const { path: dirPath } = req.body;
+
   if (!dirPath || !fs.existsSync(dirPath)) {
-    return res.status(400).json({ error: 'Invalid path' });
+    return res.status(400).json({ error: 'Path does not exist' });
+  }
+  const stat = fs.statSync(dirPath);
+  if (!stat.isDirectory()) {
+    return res.status(400).json({ error: 'Path is not a directory' });
   }
 
+  // Tear down existing watchers
   if (watcher) watcher.close();
-  if (analyzer) analyzer = null;
 
   projectRoot = dirPath;
   watcher = new ProjectWatcher(dirPath, broadcast);
   analyzer = new ProjectAnalyzer(dirPath);
 
+  // Initialize LLM service (isolated — never touches broadcast directly)
+  llmService = new LlmService(dirPath);
+
   broadcast({ type: 'project:opened', path: dirPath });
   res.json({ ok: true, path: dirPath });
+
+  // Trigger LLM generation asynchronously — fire and forget
+  // No await here — this MUST NOT block or couple to broadcast()
+  setImmediate(() => {
+    if (llmService && llmService.isEnabled()) {
+      const analysis = analyzer.analyze();
+      llmService.generateDescriptions(analysis.nodes).catch((e) => {
+        console.error('[llm] Generation error:', e.message);
+      });
+    }
+  });
 });
 
-// Get current project structure
-app.get('/api/project/structure', (req, res) => {
-  if (!analyzer) return res.status(400).json({ error: 'No project open' });
-  const tree = analyzer.getTree();
-  res.json(tree);
-});
-
-// Analyze project
 app.get('/api/project/analyze', (req, res) => {
   if (!analyzer) return res.status(400).json({ error: 'No project open' });
-  const analysis = analyzer.analyze();
-  res.json(analysis);
+  res.json(analyzer.analyze());
 });
 
-// Get human-readable descriptions
 app.get('/api/project/human-descriptions', (req, res) => {
   if (!analyzer) return res.status(400).json({ error: 'No project open' });
   const analysis = analyzer.analyze();
-  const descriptions = analyzer.getAllHumanDescriptions(analysis.nodes);
-  res.json(descriptions);
+  res.json(analyzer.getAllHumanDescriptions(analysis.nodes));
 });
 
-// Submit PRD
-app.post('/api/prd', (req, res) => {
-  const { content } = req.body;
-  if (!content) return res.status(400).json({ error: 'No PRD content' });
+// ─── REST: LLM descriptions (client polls this endpoint) ───
 
-  const parser = new PrdParser(content);
-  const parsed = parser.parse();
-  broadcast({ type: 'prd:parsed', prd: parsed });
-  res.json(parsed);
+app.get('/api/llm/descriptions', (req, res) => {
+  if (!llmService) return res.json({ ready: false, descriptions: {} });
+  res.json({
+    ready: llmService.isReady(),
+    generating: llmService.isGenerating(),
+    descriptions: llmService.getCachedDescriptions(),
+  });
 });
 
-// User asks agent for clarification
-app.post('/api/agent/prompt', (req, res) => {
-  const { prompt } = req.body;
-  broadcast({ type: 'agent:suggest-prompt', prompt });
-  res.json({ ok: true });
+app.get('/api/llm/logs', (req, res) => {
+  if (!llmService) return res.json([]);
+  res.json(llmService.getLogs());
 });
 
-// Report a bug
-app.post('/api/bug/report', (req, res) => {
-  const { description, file } = req.body;
-  broadcast({ type: 'bug:reported', description, file });
-  res.json({ ok: true });
-});
+// ─── WebSocket ───
 
-// --- WebSocket ---
 wss.on('connection', (ws) => {
-  console.log('Client connected');
+  console.log('\x1b[90m  [ws] Client connected\x1b[0m');
 
+  // Send current state to newly connected client
   if (analyzer) {
-    ws.send(JSON.stringify({ type: 'project:state', tree: analyzer.getTree(), analysis: analyzer.analyze() }));
+    const analysis = analyzer.analyze();
+    ws.send(JSON.stringify({ type: 'project:state', analysis }));
   }
 
-  if (watcher && typeof watcher.getEditCounts === 'function') {
-    ws.send(JSON.stringify({ type: 'edit-counts:state', counts: watcher.getEditCounts() }));
+  if (watcher) {
+    ws.send(JSON.stringify({
+      type: 'edit-counts:state',
+      counts: watcher.getEditSessionCounts()
+    }));
   }
 
-  ws.on('close', () => console.log('Client disconnected'));
+  ws.on('close', () => {
+    console.log('\x1b[90m  [ws] Client disconnected\x1b[0m');
+  });
+  ws.on('error', (e) => {
+    console.error('\x1b[31m  [ws] Error:\x1b[0m', e.message);
+  });
 });
 
-// --- Start ---
+// ─── Start ───
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`\n  [*] Vibe Monitor running at http://localhost:${PORT}\n`);
+  console.log(`\n  \x1b[36m[*] Vibe Guarding running at http://localhost:${PORT}\x1b[0m\n`);
 });

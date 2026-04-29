@@ -1,8 +1,13 @@
 /**
- * Vibe Monitor — Main Application Controller
+ * Vibe Guarding — Application Controller
  *
- * Manages WebSocket connection, project state, UI panels,
- * and coordinates between server and D3 visualization.
+ * Owns: WebSocket lifecycle, project state, tree rendering,
+ *       details panel, LLM description polling, view toggle.
+ *
+ * Invariants:
+ *   - Never calls D3 directly — all graph ops go through this.visualizer
+ *   - Tree rebuild only on full project reload, not on every file change
+ *   - LLM polling: max 20 polls × 3s = 60s window, then stops
  */
 class App {
   constructor() {
@@ -11,16 +16,23 @@ class App {
     this.projectRoot = null;
     this.projectName = '';
 
-    // Cached data
-    this.treeData = null;
     this.analysisData = null;
-    this.fullAnalysis = null;
     this.currentNode = null;
     this.humanDescriptions = {};
+    this.llmDescriptions = {};
+    this.editCounts = {};
 
-    // Pending file changes (batched for incremental update)
+    this.currentView = 'dev'; // 'dev' | 'simple'
+
+    // Batched incremental updates
     this.pendingChanges = [];
     this.updateTimer = null;
+
+    // LLM polling
+    this.llmPollTimer = null;
+    this.llmPollCount = 0;
+    this.LLM_POLL_MAX = 20;
+    this.LLM_POLL_INTERVAL = 3000;
 
     this._initUI();
     this._connect();
@@ -30,42 +42,41 @@ class App {
 
   _connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}`;
-
-    this.ws = new WebSocket(wsUrl);
-    this.ws.onopen = () => {
-      this._setStatus('connected');
+    this.ws = new WebSocket(`${protocol}//${location.host}`);
+    this.ws.onopen    = () => this._setStatus('connected');
+    this.ws.onclose   = () => { this._setStatus('disconnected'); setTimeout(() => this._connect(), 3000); };
+    this.ws.onerror   = () => this.ws.close();
+    this.ws.onmessage = (msg) => {
+      try { this._handleMessage(JSON.parse(msg.data)); }
+      catch (e) { console.error('[ws] parse error', e); }
     };
-    this.ws.onclose = () => {
-      this._setStatus('disconnected');
-      setTimeout(() => this._connect(), 3000);
-    };
-    this.ws.onerror = () => this.ws.close();
-    this.ws.onmessage = (msg) => this._handleMessage(JSON.parse(msg.data));
   }
 
   _setStatus(state) {
-    const dot = document.getElementById('statusDot');
+    const dot  = document.getElementById('statusDot');
     const text = document.getElementById('statusText');
-    dot.className = `status-dot ${state}`;
-    text.textContent = state === 'connected' ? `connected${this.projectName ? ' — ' + this.projectName : ''}` : 'disconnected';
+    dot.className = 'status-dot ' + state;
+    text.textContent = state === 'connected'
+      ? (this.projectName ? `connected · ${this.projectName}` : 'connected')
+      : 'disconnected';
   }
 
-  // ─── Message Handler ───
+  // ─── Message Router ───
 
   _handleMessage(data) {
     switch (data.type) {
       case 'project:opened':
         this.projectRoot = data.path;
-        this.projectName = data.path.split('/').pop() || data.path.split('\\').pop();
+        this.projectName = data.path.split(/[/\\]/).filter(Boolean).pop() || data.path;
         this._setStatus('connected');
-        this._log('project', `Opened: ${data.path}`);
+        this._log(data.type, data.path);
         this._loadAnalysis();
         break;
 
       case 'project:state':
-        if (data.tree) this.treeData = data.tree;
-        if (data.analysis) {
+        // Only render on initial load. On reconnect the graph is already live —
+        // re-rendering would reset D3 node positions and cause nodes to fly apart.
+        if (data.analysis && !this.visualizer) {
           this.analysisData = data.analysis;
           this._renderGraph(data.analysis);
           this._loadHumanDescriptions();
@@ -74,42 +85,28 @@ class App {
 
       case 'file:added':
       case 'file:deleted':
+      case 'file:changed':
       case 'dir:added':
       case 'dir:deleted':
         this._log(data.type, data.path);
         this._queueChange(data);
         break;
 
-      case 'file:changed':
+      case 'agent:editing-start':
         this._log(data.type, data.path);
         this._queueChange(data);
         break;
 
-      case 'prd:parsed':
-        this._displayPrd(data.prd);
-        break;
-
-      case 'agent:suggest-prompt':
-        this._showPromptModal(data.prompt);
-        break;
-
-      case 'bug:reported':
-        this._log('bug', `Bug reported: ${data.description} (${data.file})`);
-        break;
-
-      case 'agent:editing-start':
-        this._queueChange(data);
-        break;
-
       case 'agent:editing-end':
+        this._log(data.type, data.path);
         this._queueChange(data);
         break;
 
       case 'edit-counts:state':
       case 'edit-counts:update':
-        if (this.visualizer) {
-          this.visualizer.setEditCounts(data.counts || {});
-        }
+        this.editCounts = data.counts || {};
+        if (this.visualizer) this.visualizer.setEditCounts(this.editCounts);
+        this._refreshTreeBadges();
         break;
     }
   }
@@ -118,19 +115,17 @@ class App {
 
   _queueChange(change) {
     this.pendingChanges.push(change);
-    if (this.updateTimer) clearTimeout(this.updateTimer);
-    this.updateTimer = setTimeout(() => this._flushChanges(), 500);
+    clearTimeout(this.updateTimer);
+    this.updateTimer = setTimeout(() => this._flushChanges(), 300);
   }
 
   _flushChanges() {
-    if (this.pendingChanges.length === 0) return;
-    if (this.visualizer) {
-      this.visualizer.incrementalUpdate(this.pendingChanges);
-    }
+    if (!this.pendingChanges.length || !this.visualizer) { this.pendingChanges = []; return; }
+    this.visualizer.incrementalUpdate(this.pendingChanges);
     this.pendingChanges = [];
   }
 
-  // ─── API Calls ───
+  // ─── API ───
 
   async _loadAnalysis() {
     try {
@@ -138,9 +133,10 @@ class App {
       const data = await res.json();
       this.analysisData = data;
       this._renderGraph(data);
-      this._loadHumanDescriptions();
+      await this._loadHumanDescriptions();
+      this._startLlmPoll();
     } catch (e) {
-      console.error('Failed to load analysis:', e);
+      console.error('[app] analysis load failed', e);
     }
   }
 
@@ -148,18 +144,16 @@ class App {
     try {
       const res = await fetch('/api/project/human-descriptions');
       this.humanDescriptions = await res.json();
-      if (this.visualizer) {
-        this.visualizer.setHumanDescriptions(this.humanDescriptions);
-      }
-      if (this.currentNode && this.humanDescriptions[this.currentNode.path]) {
-        this._showNodeDetails(this.currentNode);
-      }
+      if (this.visualizer) this.visualizer.setDescriptions({ ...this.humanDescriptions, ...this.llmDescriptions });
+      if (this.currentNode) this._showNodeDetails(this.currentNode);
     } catch (e) {
-      console.error('Failed to load descriptions:', e);
+      console.error('[app] human descriptions load failed', e);
     }
   }
 
   async _openProject(dirPath) {
+    dirPath = dirPath.trim();
+    if (!dirPath) return;
     try {
       const res = await fetch('/api/project/open', {
         method: 'POST',
@@ -167,197 +161,286 @@ class App {
         body: JSON.stringify({ path: dirPath }),
       });
       const data = await res.json();
-      if (data.error) {
-        this._log('error', `Open failed: ${data.error}`);
+      if (data.error) this._log('info', `Error: ${data.error}`);
+    } catch (e) {
+      this._log('info', `Open failed: ${e.message}`);
+    }
+  }
+
+  // ─── LLM Description Polling ───
+
+  _startLlmPoll() {
+    clearInterval(this.llmPollTimer);
+    this.llmPollCount = 0;
+    this._setLlmStatus('loading');
+
+    this.llmPollTimer = setInterval(async () => {
+      this.llmPollCount++;
+      if (this.llmPollCount > this.LLM_POLL_MAX) {
+        clearInterval(this.llmPollTimer);
+        this._setLlmStatus('hidden');
+        return;
       }
-    } catch (e) {
-      this._log('error', `Open failed: ${e.message}`);
-    }
+      try {
+        const res  = await fetch('/api/llm/descriptions');
+        const data = await res.json();
+        if (data.descriptions && Object.keys(data.descriptions).length > 0) {
+          this.llmDescriptions = {};
+          for (const [path, val] of Object.entries(data.descriptions)) {
+            this.llmDescriptions[path] = val;
+          }
+          if (this.visualizer) {
+            this.visualizer.setDescriptions({ ...this.humanDescriptions, ...this.llmDescriptions });
+          }
+          if (this.currentNode) this._showNodeDetails(this.currentNode);
+        }
+        if (data.ready && !data.generating) {
+          clearInterval(this.llmPollTimer);
+          this._setLlmStatus('ready');
+        } else if (data.generating) {
+          this._setLlmStatus('generating');
+        }
+      } catch (e) { /* silent */ }
+    }, this.LLM_POLL_INTERVAL);
   }
 
-  async _submitPrd(content) {
-    try {
-      const res = await fetch('/api/prd', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
-      });
-      return await res.json();
-    } catch (e) {
-      console.error('PRD submit failed:', e);
-    }
+  _setLlmStatus(state) {
+    const el   = document.getElementById('llmStatus');
+    const dot  = document.getElementById('llmDot');
+    const text = document.getElementById('llmStatusText');
+    if (!el) return;
+
+    if (state === 'hidden') { el.style.display = 'none'; return; }
+    el.style.display = 'flex';
+
+    if (state === 'loading')     { dot.className = 'llm-dot generating'; text.textContent = 'AI loading…'; }
+    if (state === 'generating')  { dot.className = 'llm-dot generating'; text.textContent = 'AI generating…'; }
+    if (state === 'ready')       { dot.className = 'llm-dot ready';      text.textContent = 'AI ready'; }
   }
 
-  // ─── Graph Rendering ───
+  // ─── Graph ───
 
   _renderGraph(analysis) {
-    if (!analysis || !analysis.nodes || analysis.nodes.length === 0) return;
-
-    this.fullAnalysis = analysis;
+    if (!analysis?.nodes?.length) return;
+    this.analysisData = analysis;
 
     if (!this.visualizer) {
       this.visualizer = new Visualizer('graphSvg', 'tooltip');
       this.visualizer.onNodeClick = (node) => this._showNodeDetails(node);
-      this.visualizer.onDeselect = () => this._clearDetails();
+      this.visualizer.onDeselect  = () => this._clearDetails();
     }
 
-    this.visualizer.render(analysis);
+    const display = this.currentView === 'simple'
+      ? this._filterSimpleView(analysis)
+      : analysis;
+
+    this.visualizer.render(display);
+    this.visualizer.setEditCounts(this.editCounts);
+    this.visualizer.setDescriptions({ ...this.humanDescriptions, ...this.llmDescriptions });
+
     this._buildTree(analysis.nodes);
   }
 
-  // ─── Tree View ───
+  _filterSimpleView(analysis) {
+    const INFRA = [
+      /node_modules/, /\.git/, /dist/, /build/, /\.cache/, /\.turbo/,
+      /package-lock\.json/, /yarn\.lock/, /pnpm-lock\.yaml/,
+      /\.eslintrc/, /\.prettierrc/, /\.babelrc/, /tsconfig\.json/,
+      /\.(test|spec)\.(js|ts|jsx|tsx)$/i,
+      /\.env/, /Dockerfile/, /\.github/, /coverage/,
+    ];
+    const isInfra = (node) => INFRA.some((re) => re.test(node.path));
+    const tooDeep = (node) => node.path.split('/').length > 4;
+
+    const keepIds = new Set(
+      analysis.nodes
+        .filter((n) => !isInfra(n) && !tooDeep(n))
+        .map((n) => n.id)
+    );
+
+    return {
+      ...analysis,
+      nodes: analysis.nodes.filter((n) => keepIds.has(n.id)),
+      edges: analysis.edges.filter((e) => {
+        const src = typeof e.source === 'object' ? e.source.id : e.source;
+        const tgt = typeof e.target === 'object' ? e.target.id : e.target;
+        return keepIds.has(src) && keepIds.has(tgt);
+      }),
+    };
+  }
+
+  // ─── File Tree ───
 
   _buildTree(nodes) {
     const container = document.getElementById('treeContainer');
     container.innerHTML = '';
 
-    const rootNodes = nodes.filter((n) => !n.path.includes('/'));
-    const children = (parentId) => nodes.filter((n) => {
+    const byParent = {};
+    for (const n of nodes) {
       const parts = n.path.split('/');
       parts.pop();
-      return parts.join('/') === parentId;
-    });
+      const parentId = parts.join('/') || '';
+      if (!byParent[parentId]) byParent[parentId] = [];
+      byParent[parentId].push(n);
+    }
 
-    const renderNode = (node, depth) => {
-      const div = document.createElement('div');
-      div.className = `tree-item ${node.type === 'directory' ? 'directory' : ''}`;
-      div.style.paddingLeft = `${12 + depth * 14}px`;
-      const isDir = node.type === 'directory';
-      const iconSvg = isDir
-        ? '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>'
-        : '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-      div.innerHTML = `${iconSvg}<span class="tree-name">${node.name}</span>${node.role !== 'unknown' ? `<span class="role-badge">${node.role}</span>` : ''}`;
-      div.title = node.path;
-      div.dataset.id = node.id;
-      div.addEventListener('click', () => {
-        if (this.visualizer) this.visualizer.selectNode(node.id);
-      });
-      container.appendChild(div);
+    const render = (parentId, depth) => {
+      const children = byParent[parentId] || [];
+      for (const node of children) {
+        const div = document.createElement('div');
+        const isDir = node.type === 'directory';
+        div.className = `tree-item${isDir ? ' dir-item' : ''}`;
+        div.dataset.nodeId = node.id;
 
-      const kids = children(node.id);
-      for (const kid of kids) renderNode(kid, depth + 1);
+        const indent = document.createElement('span');
+        indent.className = 'indent';
+        indent.style.display = 'inline-block';
+        indent.style.width = `${depth * 12 + 10}px`;
+        indent.style.flexShrink = '0';
+
+        const iconSvg = isDir
+          ? `<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>`
+          : `<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+
+        const count = this.editCounts[node.path] || 0;
+        const badge = count > 0
+          ? `<span class="edit-badge" data-badge="${node.id}">${count}</span>`
+          : `<span class="edit-badge" data-badge="${node.id}" style="display:none">${count}</span>`;
+
+        div.appendChild(indent);
+        div.insertAdjacentHTML('beforeend',
+          `${iconSvg}<span class="tree-name">${node.name}</span>${badge}`
+        );
+
+        div.addEventListener('click', () => {
+          // selectNode triggers onNodeClick → _showNodeDetails, so don't call both
+          if (this.visualizer) {
+            this.visualizer.selectNode(node.id);
+          } else {
+            this._showNodeDetails(node);
+          }
+        });
+
+        container.appendChild(div);
+        if (isDir) render(node.id, depth + 1);
+      }
     };
 
-    for (const root of rootNodes) renderNode(root, 0);
+    render('', 0);
+  }
+
+  _refreshTreeBadges() {
+    document.querySelectorAll('[data-badge]').forEach((el) => {
+      const nodeId = el.dataset.badge;
+      const node = this.analysisData?.nodes?.find((n) => n.id === nodeId);
+      if (!node) return;
+      const count = this.editCounts[node.path] || 0;
+      el.textContent = count;
+      el.style.display = count > 0 ? '' : 'none';
+      // Mark editing in tree
+      const treeItem = el.closest('.tree-item');
+      if (treeItem) treeItem.classList.toggle('editing-item', count > 0);
+    });
   }
 
   // ─── Details Panel ───
 
   _showNodeDetails(node) {
     this.currentNode = node;
-    document.querySelectorAll('.tree-item.active').forEach((el) => el.classList.remove('active'));
-    const treeItem = document.querySelector(`.tree-item[data-id="${CSS.escape(node.id)}"]`);
-    if (treeItem) treeItem.classList.add('active');
+
+    // Highlight in tree
+    document.querySelectorAll('.tree-item.selected').forEach((el) => el.classList.remove('selected'));
+    const treeItem = document.querySelector(`.tree-item[data-node-id="${CSS.escape(node.id)}"]`);
+    if (treeItem) treeItem.classList.add('selected');
 
     const content = document.getElementById('detailsContent');
 
-    const roleLabel = node.prdGhost ? 'planned' : (node.role || 'unknown');
-    const isBug = this.visualizer && this.visualizer.bugReports[node.id];
-    const desc = node.description || this.humanDescriptions[node.path] || '';
+    // Gather descriptions
+    const humanDesc = this.humanDescriptions[node.path] || this.humanDescriptions[node.name] || '';
+    const llmEntry  = this.llmDescriptions[node.path];
+    const llmName   = llmEntry?.human_name || '';
+    const llmMeta   = llmEntry?.metaphor_desc || '';
+
+    // Edit sessions
+    const sessions = this.editCounts[node.path] || 0;
+    const maxSessions = Math.max(1, ...Object.values(this.editCounts));
+    const heatPct = Math.round((sessions / maxSessions) * 100);
+
+    // Role chip
+    const role = node.role || 'unknown';
 
     content.innerHTML = `
-      ${desc ? `<div class="detail-row">
-        <div class="label">Description</div>
-        <div class="value" style="font-size:12px;color:var(--muted);line-height:1.6">${desc}</div>
+      <div class="detail-section">
+        <div class="detail-label">File</div>
+        <div class="detail-value">${node.name}</div>
+        <div class="detail-value" style="font-size:10px;color:var(--text-muted);margin-top:2px">${node.path}</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">Type</div>
+        <span class="role-chip ${role}">${role}</span>
+      </div>
+
+      ${sessions > 0 ? `
+      <div class="detail-section">
+        <div class="detail-label">Edit Sessions</div>
+        <div class="heat-bar-wrap">
+          <div class="heat-bar"><div class="heat-bar-fill" style="width:${heatPct}%"></div></div>
+          <span class="heat-count">${sessions}</span>
+        </div>
       </div>` : ''}
-      <div class="detail-row">
-        <div class="label">Name</div>
-        <div class="value">${node.name}</div>
-      </div>
-      <div class="detail-row">
-        <div class="label">Path</div>
-        <div class="value" style="font-size:11px">${node.id}</div>
-      </div>
-      <div class="detail-row">
-        <div class="label">Type</div>
-        <div class="value">${node.type} / ${roleLabel}</div>
-      </div>
-      ${node.prdGhost ? `<div class="detail-row"><div class="label">PRD Planned</div><div class="value" style="color:#a78bfa">${node.description || 'Feature from PRD'}</div></div>` : ''}
-      <div class="detail-actions">
-        <button class="detail-btn" id="btnCopyPath">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+
+      ${llmName ? `
+      <div class="detail-section">
+        <div class="detail-label">AI Description</div>
+        <div class="llm-desc-block">
+          <div style="font-weight:600;color:var(--text-primary);font-size:12px">${llmName}</div>
+          ${llmMeta ? `<div class="metaphor">${llmMeta}</div>` : ''}
+        </div>
+      </div>` : humanDesc ? `
+      <div class="detail-section">
+        <div class="detail-label">Description</div>
+        <div class="detail-value plain">${humanDesc}</div>
+      </div>` : ''}
+
+      ${node.size ? `
+      <div class="detail-section">
+        <div class="detail-label">Size</div>
+        <div class="detail-value">${this._formatSize(node.size)}</div>
+      </div>` : ''}
+
+      <div class="detail-section" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--border-soft)">
+        <button class="detail-btn" id="detailCopyPath">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
           Copy Path
-        </button>
-        <button class="detail-btn ${isBug ? 'danger' : ''}" id="btnToggleBug">
-          ${isBug ? 'Clear Bug Flag' : 'Report Bug'}
         </button>
       </div>
     `;
 
-    document.getElementById('btnCopyPath')?.addEventListener('click', () => {
-      navigator.clipboard.writeText(node.id).then(() => {
-        this._log('clipboard', `Copied: ${node.id}`);
-      });
-    });
-
-    document.getElementById('btnToggleBug')?.addEventListener('click', () => {
-      if (this.visualizer) {
-        if (this.visualizer.bugReports[node.id]) {
-          this.visualizer.clearBug(node.id);
-          this._log('bug', `Cleared bug flag: ${node.id}`);
-        } else {
-          this.visualizer.markBug(node.id);
-          this._log('bug', `Bug reported: ${node.id}`);
-        }
-        this._showNodeDetails(node);
-      }
+    document.getElementById('detailCopyPath')?.addEventListener('click', () => {
+      navigator.clipboard.writeText(node.path);
+      this._log('info', `Copied: ${node.path}`);
     });
   }
 
   _clearDetails() {
     this.currentNode = null;
-    document.getElementById('detailsContent').innerHTML = '<p class="muted">Click a node to see details</p>';
-    document.querySelectorAll('.tree-item.active').forEach((el) => el.classList.remove('active'));
+    document.querySelectorAll('.tree-item.selected').forEach((el) => el.classList.remove('selected'));
+    document.getElementById('detailsContent').innerHTML = `
+      <div class="details-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32" opacity=".3">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <p>Click any node to inspect</p>
+      </div>`;
   }
 
-  // ─── PRD Display ───
-
-  _displayPrd(prd) {
-    const panel = document.getElementById('prdPanel');
-    const content = document.getElementById('prdContent');
-
-    let html = `<div class="prd-title">${prd.title}</div>`;
-
-    if (prd.features.length > 0) {
-      html += '<div class="prd-section-label">Features</div>';
-      for (const f of prd.features) {
-        html += `<div class="prd-item"><div class="prd-name">${f.name}</div><div class="prd-desc">${f.description}</div></div>`;
-      }
-    }
-
-    if (prd.modules.length > 0) {
-      html += '<div class="prd-section-label">Expected Modules</div>';
-      for (const m of prd.modules) {
-        html += `<div class="prd-item"><div class="prd-name">${m.name}</div></div>`;
-      }
-    }
-
-    content.innerHTML = html;
-
-    document.querySelectorAll('.details-tab').forEach((t) => t.classList.remove('active'));
-    document.querySelectorAll('.details-panel').forEach((p) => p.classList.remove('active'));
-    document.querySelector('.details-tab[data-target="prdPanel"]')?.classList.add('active');
-    panel.classList.add('active');
-
-    if (this.visualizer) {
-      const allPlanned = [...prd.features, ...prd.modules.map((m) => ({ ...m, role: 'component' }))];
-      this.visualizer.setPrdGhosts(allPlanned);
-    }
-  }
-
-  // ─── Prompt Modal ───
-
-  _showPromptModal(prompt) {
-    const modal = document.getElementById('promptModal');
-    const textarea = document.getElementById('promptText');
-    modal.classList.remove('hidden');
-    textarea.value = prompt;
-
-    document.getElementById('btnCopyPrompt').onclick = () => {
-      navigator.clipboard.writeText(prompt).then(() => {
-        this._log('clipboard', 'Prompt copied to clipboard');
-      });
-    };
+  _formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
   // ─── Activity Log ───
@@ -365,81 +448,64 @@ class App {
   _log(type, message) {
     const container = document.getElementById('logContainer');
     const entry = document.createElement('div');
-    const time = new Date().toLocaleTimeString();
-    entry.className = `log-entry ${type}`;
-    entry.innerHTML = `<span class="log-time">${time}</span><span class="log-event">${type}</span><span class="log-path">${message}</span>`;
+    entry.className = 'log-entry';
+    entry.dataset.type = type;
+    const time = new Date().toLocaleTimeString('en', { hour12: false });
+    const label = type.replace('agent:', '').replace('edit-counts:', '').replace('project:', '');
+    entry.innerHTML = `
+      <span class="log-time">${time}</span>
+      <span class="log-evt">${label}</span>
+      <span class="log-path">${message}</span>`;
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
-
-    while (container.children.length > 200) {
-      container.removeChild(container.firstChild);
-    }
+    while (container.children.length > 300) container.removeChild(container.firstChild);
   }
 
-  // ─── UI Event Binding ───
+  // ─── UI Initialization ───
 
   _initUI() {
-    document.getElementById('btnOpenProject').addEventListener('click', () => {
-      const path = prompt('Enter the absolute path to your project:', localStorage.getItem('vibe-monitor-last-path') || '');
-      if (path && path.trim()) {
-        localStorage.setItem('vibe-monitor-last-path', path.trim());
-        this._openProject(path.trim());
-      }
+    // Project path input
+    const input = document.getElementById('projectPathInput');
+    const btnOpen = document.getElementById('btnOpenProject');
+
+    const doOpen = () => {
+      const p = input.value.trim();
+      if (p) this._openProject(p);
+    };
+
+    btnOpen.addEventListener('click', doOpen);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doOpen(); });
+
+    // View toggle
+    document.querySelectorAll('.view-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.view === this.currentView) return;
+        this.currentView = btn.dataset.view;
+        document.querySelectorAll('.view-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (this.analysisData) this._renderGraph(this.analysisData);
+        this._log('info', `View: ${this.currentView}`);
+      });
     });
 
-    const fallbackPath = localStorage.getItem('vibe-monitor-last-path');
-    if (fallbackPath) {
-      setTimeout(() => this._openProject(fallbackPath), 500);
-    }
-
-    document.getElementById('btnOpenPrd').addEventListener('click', () => {
-      document.getElementById('prdFileInput').click();
+    // Tree filter
+    document.getElementById('treeFilter')?.addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase();
+      document.querySelectorAll('.tree-item').forEach((el) => {
+        el.style.display = q === '' || el.textContent.toLowerCase().includes(q) ? '' : 'none';
+      });
     });
 
-    document.getElementById('prdFileInput').addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const content = await file.text();
-      this._submitPrd(content);
-      this._log('prd', `Loaded PRD: ${file.name}`);
-    });
-
-    document.getElementById('modalClose').addEventListener('click', () => {
-      document.getElementById('promptModal').classList.add('hidden');
-    });
-    document.getElementById('promptModal').addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) {
-        document.getElementById('promptModal').classList.add('hidden');
-      }
-    });
-
-    document.getElementById('btnClearLog').addEventListener('click', () => {
+    // Log controls
+    document.getElementById('btnClearLog')?.addEventListener('click', () => {
       document.getElementById('logContainer').innerHTML = '';
     });
 
-    document.getElementById('btnToggleLog').addEventListener('click', () => {
+    document.getElementById('btnToggleLog')?.addEventListener('click', () => {
       const bar = document.getElementById('logbar');
       const btn = document.getElementById('btnToggleLog');
       bar.classList.toggle('collapsed');
       btn.textContent = bar.classList.contains('collapsed') ? 'Show' : 'Hide';
-    });
-
-    document.querySelectorAll('.details-tab').forEach((tab) => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.details-tab').forEach((t) => t.classList.remove('active'));
-        document.querySelectorAll('.details-panel').forEach((p) => p.classList.remove('active'));
-        tab.classList.add('active');
-        const target = document.getElementById(tab.dataset.target);
-        if (target) target.classList.add('active');
-      });
-    });
-
-    document.getElementById('treeFilter').addEventListener('input', (e) => {
-      const q = e.target.value.toLowerCase();
-      document.querySelectorAll('.tree-item').forEach((el) => {
-        const match = el.textContent.toLowerCase().includes(q);
-        el.style.display = match ? '' : 'none';
-      });
     });
   }
 }
