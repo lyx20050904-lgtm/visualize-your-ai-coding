@@ -32,7 +32,6 @@ class Visualizer {
 
     this.selectedId     = null;
     this.editingIds     = new Set();
-    this.editFadeTimers = {};
     this.editCounts     = {};
     this._maxCount      = 1;
     this.descriptions   = {};
@@ -43,6 +42,10 @@ class Visualizer {
 
     this.onNodeClick = null;
     this.onDeselect  = null;
+
+    // F06: 30s heat refresh cycle — bulk DOM update, not per-event
+    this._heatDirty = false;
+    this._heatTimer = setInterval(() => this._flushHeat(), 30000);
 
     this._setupDefs();
     this._setupZoom();
@@ -184,6 +187,13 @@ class Visualizer {
   setEditCounts(counts) {
     this.editCounts = counts || {};
     this._maxCount  = Math.max(1, ...Object.values(this.editCounts));
+    this._heatDirty = true;
+  }
+
+  // F06: bulk heat refresh every 30s — reduces DOM churn
+  _flushHeat() {
+    if (!this._heatDirty) return;
+    this._heatDirty = false;
     this._refreshNodeColors();
   }
 
@@ -241,15 +251,32 @@ class Visualizer {
 
       if (type === 'agent:editing-start') {
         this.editingIds.add(id);
-        clearTimeout(this.editFadeTimers[id]);
         this._refreshNodeColors(id);
 
       } else if (type === 'agent:editing-end') {
-        clearTimeout(this.editFadeTimers[id]);
-        this.editFadeTimers[id] = setTimeout(() => {
-          this.editingIds.delete(id);
-          this._refreshNodeColors(id);
-        }, 500);
+        this.editingIds.delete(id);
+        // D3 transition: smooth 500ms ease-out from #FF6B35 to normal color
+        // No setTimeout — D3 handles interpolation frame-by-frame
+        const sel = this._nodeSel ? this._nodeSel.filter((d) => d.id === id) : null;
+        if (sel) {
+          sel.select('.node-body')
+            .interrupt()
+            .transition().duration(500).ease(d3.easeCubicOut)
+            .attr('fill', (d) => this._nodeHeatColor(d));
+          sel.select('.heat-ring')
+            .interrupt()
+            .transition().duration(500).ease(d3.easeCubicOut)
+            .attr('fill', (d) => this._nodeHeatColor(d))
+            .attr('opacity', (d) => (this.editCounts[d.path] || 0) > 0 ? 0.6 : 0);
+          sel.select('.node-label')
+            .interrupt()
+            .transition().duration(500).ease(d3.easeCubicOut)
+            .attr('fill', 'var(--text-muted)')
+            .attr('opacity', (d) => d.type === 'directory' ? 1 : 0);
+          // Filter changes immediately (URL-based, no meaningful interpolation)
+          sel.select('.node-body').attr('filter', (d) => this._heatFilter(d));
+          sel.select('.heat-ring').attr('filter', (d) => this._heatFilter(d));
+        }
 
       } else if (type === 'file:changed') {
         this._spawnPingRing(id);
@@ -270,7 +297,6 @@ class Visualizer {
       } else if (type === 'file:deleted' || type === 'dir:deleted') {
         this.nodes    = this.nodes.filter((n) => n.id !== id);
         this.editingIds.delete(id);
-        clearTimeout(this.editFadeTimers[id]);
         delete this.nodeMap[id];
         structural = true;
       }
@@ -742,6 +768,6 @@ class Visualizer {
 
   destroy() {
     if (this.simulation) this.simulation.stop();
-    Object.values(this.editFadeTimers).forEach(clearTimeout);
+    clearInterval(this._heatTimer);
   }
 }
