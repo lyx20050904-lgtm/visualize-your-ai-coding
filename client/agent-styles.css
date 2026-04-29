@@ -1,0 +1,92 @@
+/* F13 Agent Result — extracted from styles.css (927->837 LOC) */
+
+.agent-loading {
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 8px 0;
+  animation: agent-pulse 1.2s ease-in-out infinite;
+}
+.agent-loading code {
+  color: var(--brand);
+}
+
+.agent-error {
+  color: var(--red);
+  font-size: 11px;
+  padding: 8px 0;
+}
+
+.agent-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.agent-val {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.agent-pattern {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  background: var(--brand-dim);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  width: fit-content;
+}
+
+.agent-related {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.agent-related code {
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+@keyframes agent-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.agent-stream {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  max-height: 260px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-top: 6px;
+}

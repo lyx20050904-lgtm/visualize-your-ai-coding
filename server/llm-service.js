@@ -1,6 +1,11 @@
 /**
  * LLM Service — Async semantic description generator
  *
+ * LOC: ~526 (exceeds 400-line guardrail)
+ * Reason: F10 batch generation + F13 single-node streaming + 3 provider variants
+ *   (OpenAI batch, Anthropic batch, OpenAI stream, Anthropic fallback, single-call).
+ *   Each provider path is structurally distinct — extracting would add abstraction overhead.
+ *
  * Isolation contract:
  *   - NEVER calls broadcast()
  *   - NEVER modifies file-watcher state
