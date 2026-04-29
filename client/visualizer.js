@@ -292,10 +292,16 @@ class Visualizer {
             id, path,
             name: path.split('/').pop(),
             type: type === 'dir:added' ? 'directory' : 'file',
-            role: 'unknown', size: 0,
+            role: type === 'file' ? _inferRoleFromExt(path) : 'folder',
+            size: 0,
           };
           this.nodes.push(node);
           this.nodeMap[id] = node;
+          // Add contains edge from parent directory
+          const parentPath = path.split('/').slice(0, -1).join('/');
+          if (parentPath && this.nodeMap[parentPath]) {
+            this.edges.push({ source: parentPath, target: id, type: 'contains' });
+          }
           structural = true;
         }
 
@@ -785,4 +791,24 @@ class Visualizer {
     if (this.simulation) this.simulation.stop();
     clearInterval(this._heatTimer);
   }
+}
+
+// ─── Incremental update helpers ───
+
+function _inferRoleFromExt(filePath) {
+  const name = filePath.split('/').pop() || '';
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  // Check test files first (two-part extension like .test.js)
+  if (/\.(test|spec)\.(ts|js|tsx|jsx)$/i.test(name)) return 'test';
+  const map = {
+    'tsx': 'component', 'jsx': 'component', 'vue': 'component', 'svelte': 'component',
+    'css': 'style', 'scss': 'style', 'less': 'style',
+    'json': 'config', 'yaml': 'config', 'yml': 'config', 'env': 'config', 'ini': 'config',
+    'md': 'doc', 'mdx': 'doc', 'txt': 'doc', 'rst': 'doc',
+    'html': 'template', 'htm': 'template',
+    'py': 'service', 'go': 'service', 'rs': 'service', 'java': 'service',
+    'sh': 'script', 'bash': 'script', 'zsh': 'script',
+    'sql': 'data',
+  };
+  return map[ext] || 'unknown';
 }
