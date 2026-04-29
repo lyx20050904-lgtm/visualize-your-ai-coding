@@ -14,34 +14,26 @@
 
 <!-- ── Top Bar ── -->
 <header id="topbar">
-  <div class="topbar-left">
-    <div class="logo">
-      <svg class="logo-icon" viewBox="0 0 20 20" fill="none">
-        <circle cx="10" cy="10" r="2.5" fill="currentColor"/>
-        <circle cx="3"  cy="5"  r="1.8" fill="currentColor" opacity=".6"/>
-        <circle cx="17" cy="5"  r="1.8" fill="currentColor" opacity=".6"/>
-        <circle cx="3"  cy="15" r="1.8" fill="currentColor" opacity=".6"/>
-        <circle cx="17" cy="15" r="1.8" fill="currentColor" opacity=".6"/>
-        <line x1="10" y1="10" x2="3"  y2="5"  stroke="currentColor" stroke-width="1" opacity=".4"/>
-        <line x1="10" y1="10" x2="17" y2="5"  stroke="currentColor" stroke-width="1" opacity=".4"/>
-        <line x1="10" y1="10" x2="3"  y2="15" stroke="currentColor" stroke-width="1" opacity=".4"/>
-        <line x1="10" y1="10" x2="17" y2="15" stroke="currentColor" stroke-width="1" opacity=".4"/>
-      </svg>
-      <span class="logo-text">Vibe Guarding</span>
-    </div>
+  <div class="logo">
+    <svg class="logo-icon" viewBox="0 0 20 20" fill="none">
+      <circle cx="10" cy="10" r="2.5" fill="currentColor"/>
+      <circle cx="3"  cy="5"  r="1.8" fill="currentColor" opacity=".6"/>
+      <circle cx="17" cy="5"  r="1.8" fill="currentColor" opacity=".6"/>
+      <circle cx="3"  cy="15" r="1.8" fill="currentColor" opacity=".6"/>
+      <circle cx="17" cy="15" r="1.8" fill="currentColor" opacity=".6"/>
+      <line x1="10" y1="10" x2="3"  y2="5"  stroke="currentColor" stroke-width="1" opacity=".4"/>
+      <line x1="10" y1="10" x2="17" y2="5"  stroke="currentColor" stroke-width="1" opacity=".4"/>
+      <line x1="10" y1="10" x2="3"  y2="15" stroke="currentColor" stroke-width="1" opacity=".4"/>
+      <line x1="10" y1="10" x2="17" y2="15" stroke="currentColor" stroke-width="1" opacity=".4"/>
+    </svg>
+    <span class="logo-text">Vibe Guarding</span>
   </div>
 
-  <div class="topbar-center">
-    <div class="project-input-wrap" id="projectInputWrap">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-        <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-      </svg>
-      <input type="text" id="projectPathInput" placeholder="Paste absolute project path and press Enter…" autocomplete="off" spellcheck="false"/>
-      <button id="btnOpenProject" class="btn-open">Open</button>
-    </div>
+  <div class="project-input-wrap" id="projectInputWrap">
+    <input type="text" id="projectPathInput" placeholder="Paste project path and press Enter…" autocomplete="off">
   </div>
 
-  <div class="topbar-right">
+  <div class="topbar-actions">
     <!-- View toggle -->
     <div class="view-toggle" id="viewToggle" title="Switch view">
       <button class="view-btn active" data-view="dev" title="Developer view — all files">

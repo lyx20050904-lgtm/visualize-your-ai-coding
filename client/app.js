@@ -464,17 +464,16 @@ class App {
   // ─── UI Initialization ───
 
   _initUI() {
-    // Project path input
-    const input = document.getElementById('projectPathInput');
-    const btnOpen = document.getElementById('btnOpenProject');
-
-    const doOpen = () => {
-      const p = input.value.trim();
-      if (p) this._openProject(p);
-    };
-
-    btnOpen.addEventListener('click', doOpen);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doOpen(); });
+    // Path input — paste path + Enter
+    const pathInput = document.getElementById('projectPathInput');
+    if (pathInput) {
+      pathInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          const p = pathInput.value.trim();
+          if (p) this._openProject(p);
+        }
+      });
+    }
 
     // View toggle
     document.querySelectorAll('.view-btn').forEach((btn) => {
