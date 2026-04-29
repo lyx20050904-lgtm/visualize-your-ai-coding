@@ -129,6 +129,7 @@ export class LlmService {
       return;
     }
     const prompt = this._buildAskPrompt(ctx);
+    const kbSummary = ctx.kbSummary || null;
 
     if (this.config.provider === 'openai') {
       await this._callOpenAIStream(prompt, res);
@@ -243,7 +244,7 @@ Return ONLY valid JSON matching this exact schema, no extra text:
 
   // ─── F13 Ask-Node Prompt ───
 
-  _buildAskPrompt({ path, role, imports, importedBy, fullContent }) {
+  _buildAskPrompt({ path, role, imports, importedBy, fullContent, kbSummary }) {
     const truncated = fullContent && fullContent.length > 6000
       ? fullContent.slice(0, 6000) + '\n... [truncated]'
       : fullContent || '';
@@ -264,6 +265,7 @@ File: ${path}
 Role: ${role}
 Imports: ${(imports || []).join(', ') || 'none'}
 Imported by: ${(importedBy || []).join(', ') || 'none'}
+${kbSummary ? `Knowledge base: ${kbSummary.lines} lines, exports: [${(kbSummary.exports || []).join(', ')}]` : ''}
 ${structureSummary}
 File content:
 \`\`\`

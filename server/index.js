@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import { ProjectWatcher } from './file-watcher.js';
 import { ProjectAnalyzer } from './project-analyzer.js';
 import { LlmService } from './llm-service.js';
+import { ProjectKnowledge } from './project-knowledge.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -22,6 +23,7 @@ let projectRoot = null;
 let watcher = null;
 let analyzer = null;
 let llmService = null;
+let knowledgeBase = null;
 
 // ─── Broadcast (sync only — no async operations here) ───
 function broadcast(data) {
@@ -65,17 +67,25 @@ app.post('/api/project/open', (req, res) => {
   // Initialize LLM service (isolated — never touches broadcast directly)
   llmService = new LlmService(dirPath);
 
+  // Initialize project knowledge base (F13 Layer 2)
+  knowledgeBase = new ProjectKnowledge(dirPath);
+
   broadcast({ type: 'project:opened', path: dirPath });
   res.json({ ok: true, path: dirPath });
 
-  // Trigger LLM generation asynchronously — fire and forget
-  // No await here — this MUST NOT block or couple to broadcast()
+  // Trigger background processes — fire and forget
+  // No await here — these MUST NOT block or couple to broadcast()
   setImmediate(() => {
     if (llmService && llmService.isEnabled()) {
       const analysis = analyzer.analyze();
       llmService.generateDescriptions(analysis.nodes).catch((e) => {
         console.error('[llm] Generation error:', e.message);
       });
+    }
+    // Scan project knowledge base (fast, local-only — no API calls)
+    if (knowledgeBase) {
+      const analysis = analyzer.analyze();
+      knowledgeBase.scan(analysis.nodes);
     }
   });
 });
@@ -99,6 +109,14 @@ app.get('/api/llm/descriptions', (req, res) => {
     ready: llmService.isReady(),
     generating: llmService.isGenerating(),
     descriptions: llmService.getCachedDescriptions(),
+  });
+});
+
+app.get('/api/knowledge/status', (req, res) => {
+  if (!knowledgeBase) return res.json({ ready: false, count: 0 });
+  res.json({
+    ready: knowledgeBase.isReady(),
+    count: Object.keys(knowledgeBase.getAllSummaries()).length,
   });
 });
 
@@ -196,12 +214,16 @@ app.post('/api/agent/ask-node/stream', (req, res) => {
     if (tgt === filePath) importedBy.push(src);
   }
 
+  // Check knowledge base for pre-computed summary (F13 Layer 2)
+  const kbSummary = knowledgeBase?.getSummary(filePath) || null;
+
   llmService.streamAskNode({
     path: filePath,
     role: role || node?.role || 'unknown',
     imports,
     importedBy,
     fullContent,
+    kbSummary,
   }, res).catch((e) => {
     if (!res.headersSent) {
       res.status(500).json({ error: e.message });
