@@ -75,6 +75,17 @@
   50% { opacity: 1; }
 }
 
+/* F14: Editing breathing ring pulse */
+.vg-node.editing .breathing-ring {
+  animation: breathe-pulse 1.2s ease-in-out infinite;
+  opacity: 1 !important;
+}
+
+@keyframes breathe-pulse {
+  0%, 100% { stroke-width: 2; opacity: 0.6; }
+  50%      { stroke-width: 4; opacity: 1;    }
+}
+
 .agent-stream {
   background: var(--surface-1);
   border: 1px solid var(--border);

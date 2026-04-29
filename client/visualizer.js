@@ -252,6 +252,9 @@ class Visualizer {
       if (type === 'agent:editing-start') {
         this.editingIds.add(id);
         this._refreshNodeColors(id);
+        // F14: add breathing ring class
+        const g = this._nodeSel ? this._nodeSel.filter((d) => d.id === id) : null;
+        if (g) g.classed('editing', true);
 
       } else if (type === 'agent:editing-end') {
         this.editingIds.delete(id);
@@ -259,6 +262,8 @@ class Visualizer {
         // No setTimeout — D3 handles interpolation frame-by-frame
         const sel = this._nodeSel ? this._nodeSel.filter((d) => d.id === id) : null;
         if (sel) {
+          // F14: remove breathing ring class after transition completes
+          setTimeout(() => { sel.classed('editing', false); }, 500);
           sel.select('.node-body')
             .interrupt()
             .transition().duration(500).ease(d3.easeCubicOut)
@@ -463,6 +468,16 @@ class Visualizer {
       .attr('r', (d) => this._nodeR(d))
       .attr('fill', (d) => this._nodeHeatColor(d))
       .attr('stroke', 'none')
+      .attr('pointer-events', 'none');
+
+    // F14: Breathing ring (visible only when .editing class is active)
+    nodeEnter.append('circle')
+      .attr('class', 'breathing-ring')
+      .attr('r', (d) => this._nodeR(d) + 3)
+      .attr('fill', 'none')
+      .attr('stroke', '#FF6B35')
+      .attr('stroke-width', 2)
+      .attr('opacity', 0)
       .attr('pointer-events', 'none');
 
     // Node body
