@@ -69,7 +69,7 @@ class App {
         this.projectRoot = data.path;
         this.projectName = data.path.split(/[/\\]/).filter(Boolean).pop() || data.path;
         this._setStatus('connected');
-        this._log(data.type, data.path);
+        LogManager.log(data.type, data.path);
         this._loadAnalysis();
         break;
 
@@ -88,17 +88,17 @@ class App {
       case 'file:changed':
       case 'dir:added':
       case 'dir:deleted':
-        this._log(data.type, data.path);
+        LogManager.log(data.type, data.path);
         this._queueChange(data);
         break;
 
       case 'agent:editing-start':
-        this._log(data.type, data.path);
+        LogManager.log(data.type, data.path);
         this._queueChange(data);
         break;
 
       case 'agent:editing-end':
-        this._log(data.type, data.path);
+        LogManager.log(data.type, data.path);
         this._queueChange(data);
         break;
 
@@ -161,16 +161,16 @@ class App {
         body: JSON.stringify({ path: dirPath }),
       });
       const data = await res.json();
-      if (data.error) this._log('info', 'Error: ' + data.error);
+      if (data.error) LogManager.log('info', 'Error: ' + data.error);
       if (data.ok) {
         this.projectRoot = data.path;
         this.projectName = data.path.split(/[/\\\\]/).filter(Boolean).pop() || data.path;
         this._setStatus('connected');
-        this._log('project:opened', data.path);
+        LogManager.log('project:opened', data.path);
         this._loadAnalysis();
       }
     } catch (e) {
-      this._log('info', 'Open failed: ' + e.message);
+      LogManager.log('info', 'Open failed: ' + e.message);
     }
   }
 
@@ -433,7 +433,7 @@ class App {
 
     document.getElementById('detailCopyPath')?.addEventListener('click', () => {
       navigator.clipboard.writeText(node.path);
-      this._log('info', 'Copied: ' + node.path);
+      LogManager.log('info', 'Copied: ' + node.path);
     });
 
     document.getElementById('detailAskAgent')?.addEventListener('click', () => {
@@ -554,21 +554,6 @@ class App {
     return d.innerHTML;
   }
 
-  // ─── Activity Log ───
-
-  _log(type, message) {
-    const container = document.getElementById('logContainer');
-    const entry = document.createElement('div');
-    entry.className = 'log-entry';
-    entry.dataset.type = type;
-    const time = new Date().toLocaleTimeString('en', { hour12: false });
-    const label = type.replace('agent:', '').replace('edit-counts:', '').replace('project:', '');
-    entry.innerHTML = '<span class="log-time">' + time + '</span><span class="log-evt">' + label + '</span><span class="log-path">' + message + '</span>';
-    container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
-    while (container.children.length > 300) container.removeChild(container.firstChild);
-  }
-
   // ─── UI Initialization ───
 
   _initUI() {
@@ -589,7 +574,7 @@ class App {
         document.querySelectorAll('.view-btn').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         if (this.analysisData) this._renderGraph(this.analysisData);
-        this._log('info', 'View: ' + this.currentView);
+        LogManager.log('info', 'View: ' + this.currentView);
       });
     });
 

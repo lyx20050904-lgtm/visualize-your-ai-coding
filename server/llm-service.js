@@ -248,13 +248,23 @@ Return ONLY valid JSON matching this exact schema, no extra text:
       ? fullContent.slice(0, 6000) + '\n... [truncated]'
       : fullContent || '';
 
+    // Structural summary for large files
+    let structureSummary = '';
+    if (fullContent) {
+      const lines = fullContent.split('\n').length;
+      const fnCount = (fullContent.match(/^\s*(export\s+)?(async\s+)?function\s+|^\s*(export\s+)?class\s+|^\s*(export\s+)?const\s+\w+\s*=[^;]*=>|^\s*interface\s+|^\s*type\s+\w+\s*=/gm) || []).length;
+      if (lines > 150 || fullContent.length > 6000) {
+        structureSummary = `\nFile structure: ${lines} lines, ~${fnCount} functions/classes/exports.`;
+      }
+    }
+
     return `You are a professional software architect. Analyze the following file and explain its role in the project. CRITICAL: You MUST answer in Simplified Chinese. All text fields must be in Chinese, NOT English.
 
 File: ${path}
 Role: ${role}
 Imports: ${(imports || []).join(', ') || 'none'}
 Imported by: ${(importedBy || []).join(', ') || 'none'}
-
+${structureSummary}
 File content:
 \`\`\`
 ${truncated}
@@ -390,11 +400,20 @@ STRICTLY output ONLY a valid JSON object. No markdown, no headings, no code fenc
               if (result[key] !== undefined) filtered[key] = result[key];
             }
             res.write(`data: ${JSON.stringify({ type: 'done', result: filtered })}\n\n`);
+            res.end();
           } catch (e) {
-            // If JSON parsing fails, send the raw content
-            res.write(`data: ${JSON.stringify({ type: 'done', result: { summary: fullContent } })}\n\n`);
+            // Stream produced invalid JSON — retry with non-streaming (has response_format guard)
+            this._addLog('warn', `Stream JSON parse failed, retrying via non-streaming: ${e.message}`);
+            this._callOpenAISingle(prompt)
+              .then((result) => {
+                res.write(`data: ${JSON.stringify({ type: 'done', result })}\n\n`);
+                res.end();
+              })
+              .catch((e2) => {
+                res.write(`data: ${JSON.stringify({ type: 'error', text: `JSON parse failed after retry: ${e2.message}` })}\n\n`);
+                res.end();
+              });
           }
-          res.end();
           resolve();
         });
       });
