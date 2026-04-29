@@ -57,7 +57,7 @@ class App {
     const text = document.getElementById('statusText');
     dot.className = 'status-dot ' + state;
     text.textContent = state === 'connected'
-      ? (this.projectName ? `connected · ${this.projectName}` : 'connected')
+      ? (this.projectName ? 'connected · ' + this.projectName : 'connected')
       : 'disconnected';
   }
 
@@ -161,9 +161,16 @@ class App {
         body: JSON.stringify({ path: dirPath }),
       });
       const data = await res.json();
-      if (data.error) this._log('info', `Error: ${data.error}`);
+      if (data.error) this._log('info', 'Error: ' + data.error);
+      if (data.ok) {
+        this.projectRoot = data.path;
+        this.projectName = data.path.split(/[/\\\\]/).filter(Boolean).pop() || data.path;
+        this._setStatus('connected');
+        this._log('project:opened', data.path);
+        this._loadAnalysis();
+      }
     } catch (e) {
-      this._log('info', `Open failed: ${e.message}`);
+      this._log('info', 'Open failed: ' + e.message);
     }
   }
 
@@ -213,8 +220,8 @@ class App {
     if (state === 'hidden') { el.style.display = 'none'; return; }
     el.style.display = 'flex';
 
-    if (state === 'loading')     { dot.className = 'llm-dot generating'; text.textContent = 'AI loading…'; }
-    if (state === 'generating')  { dot.className = 'llm-dot generating'; text.textContent = 'AI generating…'; }
+    if (state === 'loading')     { dot.className = 'llm-dot generating'; text.textContent = 'AI loading...'; }
+    if (state === 'generating')  { dot.className = 'llm-dot generating'; text.textContent = 'AI generating...'; }
     if (state === 'ready')       { dot.className = 'llm-dot ready';      text.textContent = 'AI ready'; }
   }
 
@@ -289,31 +296,30 @@ class App {
       for (const node of children) {
         const div = document.createElement('div');
         const isDir = node.type === 'directory';
-        div.className = `tree-item${isDir ? ' dir-item' : ''}`;
+        div.className = 'tree-item' + (isDir ? ' dir-item' : '');
         div.dataset.nodeId = node.id;
 
         const indent = document.createElement('span');
         indent.className = 'indent';
         indent.style.display = 'inline-block';
-        indent.style.width = `${depth * 12 + 10}px`;
+        indent.style.width = (depth * 12 + 10) + 'px';
         indent.style.flexShrink = '0';
 
         const iconSvg = isDir
-          ? `<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>`
-          : `<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+          ? '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>'
+          : '<svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
 
         const count = this.editCounts[node.path] || 0;
         const badge = count > 0
-          ? `<span class="edit-badge" data-badge="${node.id}">${count}</span>`
-          : `<span class="edit-badge" data-badge="${node.id}" style="display:none">${count}</span>`;
+          ? '<span class="edit-badge" data-badge="' + node.id + '">' + count + '</span>'
+          : '<span class="edit-badge" data-badge="' + node.id + '" style="display:none">' + count + '</span>';
 
         div.appendChild(indent);
         div.insertAdjacentHTML('beforeend',
-          `${iconSvg}<span class="tree-name">${node.name}</span>${badge}`
+          iconSvg + '<span class="tree-name">' + node.name + '</span>' + badge
         );
 
         div.addEventListener('click', () => {
-          // selectNode triggers onNodeClick → _showNodeDetails, so don't call both
           if (this.visualizer) {
             this.visualizer.selectNode(node.id);
           } else {
@@ -337,7 +343,6 @@ class App {
       const count = this.editCounts[node.path] || 0;
       el.textContent = count;
       el.style.display = count > 0 ? '' : 'none';
-      // Mark editing in tree
       const treeItem = el.closest('.tree-item');
       if (treeItem) treeItem.classList.toggle('editing-item', count > 0);
     });
@@ -348,99 +353,205 @@ class App {
   _showNodeDetails(node) {
     this.currentNode = node;
 
-    // Highlight in tree
     document.querySelectorAll('.tree-item.selected').forEach((el) => el.classList.remove('selected'));
-    const treeItem = document.querySelector(`.tree-item[data-node-id="${CSS.escape(node.id)}"]`);
+    const treeItem = document.querySelector('.tree-item[data-node-id="' + CSS.escape(node.id) + '"]');
     if (treeItem) treeItem.classList.add('selected');
 
     const content = document.getElementById('detailsContent');
 
-    // Gather descriptions
     const humanDesc = this.humanDescriptions[node.path] || this.humanDescriptions[node.name] || '';
     const llmEntry  = this.llmDescriptions[node.path];
     const llmName   = llmEntry?.human_name || '';
     const llmMeta   = llmEntry?.metaphor_desc || '';
 
-    // Edit sessions
     const sessions = this.editCounts[node.path] || 0;
     const maxSessions = Math.max(1, ...Object.values(this.editCounts));
     const heatPct = Math.round((sessions / maxSessions) * 100);
 
-    // Role chip
     const role = node.role || 'unknown';
+    const isDir = node.type === 'directory';
 
-    content.innerHTML = `
-      <div class="detail-section">
-        <div class="detail-label">File</div>
-        <div class="detail-value">${node.name}</div>
-        <div class="detail-value" style="font-size:10px;color:var(--text-muted);margin-top:2px">${node.path}</div>
-      </div>
+    var html = '';
+    html += '<div class="detail-section">';
+    html += '<div class="detail-label">File</div>';
+    html += '<div class="detail-value">' + node.name + '</div>';
+    html += '<div class="detail-value" style="font-size:10px;color:var(--text-muted);margin-top:2px">' + node.path + '</div>';
+    html += '</div>';
 
-      <div class="detail-section">
-        <div class="detail-label">Type</div>
-        <span class="role-chip ${role}">${role}</span>
-      </div>
+    html += '<div class="detail-section">';
+    html += '<div class="detail-label">Type</div>';
+    html += '<span class="role-chip ' + role + '">' + role + '</span>';
+    html += '</div>';
 
-      ${sessions > 0 ? `
-      <div class="detail-section">
-        <div class="detail-label">Edit Sessions</div>
-        <div class="heat-bar-wrap">
-          <div class="heat-bar"><div class="heat-bar-fill" style="width:${heatPct}%"></div></div>
-          <span class="heat-count">${sessions}</span>
-        </div>
-      </div>` : ''}
+    if (sessions > 0) {
+      html += '<div class="detail-section">';
+      html += '<div class="detail-label">Edit Sessions</div>';
+      html += '<div class="heat-bar-wrap">';
+      html += '<div class="heat-bar"><div class="heat-bar-fill" style="width:' + heatPct + '%"></div></div>';
+      html += '<span class="heat-count">' + sessions + '</span>';
+      html += '</div></div>';
+    }
 
-      ${llmName ? `
-      <div class="detail-section">
-        <div class="detail-label">AI Description</div>
-        <div class="llm-desc-block">
-          <div style="font-weight:600;color:var(--text-primary);font-size:12px">${llmName}</div>
-          ${llmMeta ? `<div class="metaphor">${llmMeta}</div>` : ''}
-        </div>
-      </div>` : humanDesc ? `
-      <div class="detail-section">
-        <div class="detail-label">Description</div>
-        <div class="detail-value plain">${humanDesc}</div>
-      </div>` : ''}
+    if (llmName) {
+      html += '<div class="detail-section">';
+      html += '<div class="detail-label">AI Description</div>';
+      html += '<div class="llm-desc-block">';
+      html += '<div style="font-weight:600;color:var(--text-primary);font-size:12px">' + llmName + '</div>';
+      if (llmMeta) html += '<div class="metaphor">' + llmMeta + '</div>';
+      html += '</div></div>';
+    } else if (humanDesc) {
+      html += '<div class="detail-section">';
+      html += '<div class="detail-label">Description</div>';
+      html += '<div class="detail-value plain">' + humanDesc + '</div>';
+      html += '</div>';
+    }
 
-      ${node.size ? `
-      <div class="detail-section">
-        <div class="detail-label">Size</div>
-        <div class="detail-value">${this._formatSize(node.size)}</div>
-      </div>` : ''}
+    if (node.size) {
+      html += '<div class="detail-section">';
+      html += '<div class="detail-label">Size</div>';
+      html += '<div class="detail-value">' + this._formatSize(node.size) + '</div>';
+      html += '</div>';
+    }
 
-      <div class="detail-section" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--border-soft)">
-        <button class="detail-btn" id="detailCopyPath">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
-            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
-          </svg>
-          Copy Path
-        </button>
-      </div>
-    `;
+    html += '<div class="detail-section" style="margin-top:auto;padding-top:12px;border-top:1px solid var(--border-soft)">';
+    html += '<div style="display:flex;gap:6px">';
+    html += '<button class="detail-btn" id="detailCopyPath" style="flex:1">';
+    html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">';
+    html += '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>';
+    html += '</svg> Copy Path</button>';
+    if (!isDir) {
+      html += '<button class="detail-btn" id="detailAskAgent" style="flex:1">';
+      html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">';
+      html += '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>';
+      html += '</svg> Ask Agent</button>';
+    }
+    html += '</div></div>';
+
+    html += '<div id="agentResult" style="display:none;margin-top:8px"></div>';
+
+    content.innerHTML = html;
 
     document.getElementById('detailCopyPath')?.addEventListener('click', () => {
       navigator.clipboard.writeText(node.path);
-      this._log('info', `Copied: ${node.path}`);
+      this._log('info', 'Copied: ' + node.path);
+    });
+
+    document.getElementById('detailAskAgent')?.addEventListener('click', () => {
+      this._askNode(node);
     });
   }
 
   _clearDetails() {
     this.currentNode = null;
     document.querySelectorAll('.tree-item.selected').forEach((el) => el.classList.remove('selected'));
-    document.getElementById('detailsContent').innerHTML = `
-      <div class="details-empty">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32" opacity=".3">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <p>Click any node to inspect</p>
-      </div>`;
+    document.getElementById('detailsContent').innerHTML =
+      '<div class="details-empty">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32" opacity=".3">' +
+      '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>' +
+      '</svg><p>Click any node to inspect</p></div>';
   }
 
   _formatSize(bytes) {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  // ─── F13 Node Inquiry Agent (Streaming SSE) ───
+
+  async _askNode(node) {
+    const resultEl = document.getElementById('agentResult');
+    if (!resultEl) return;
+
+    resultEl.style.display = 'block';
+    resultEl.innerHTML =
+      '<div class="agent-loading">Analyzing <code>' + this._escapeHtml(node.name) + '</code>...</div>';
+
+    try {
+      const res = await fetch('/api/agent/ask-node/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: node.path, role: node.role }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({ error: 'HTTP ' + res.status }));
+        resultEl.innerHTML = '<div class="agent-error">' + this._escapeHtml(errData.error) + '</div>';
+        return;
+      }
+
+      // Switch to streaming view
+      resultEl.innerHTML =
+        '<div class="detail-section"><div class="detail-label">Agent Analysis</div>' +
+        '<div class="agent-stream" id="agentStream"></div></div>';
+
+      const streamEl = document.getElementById('agentStream');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+
+        for (const part of parts) {
+          for (const line of part.split('\n')) {
+            if (!line.startsWith('data: ')) continue;
+            const data = JSON.parse(line.slice(6));
+
+            if (data.type === 'chunk') {
+              fullText += data.text;
+              streamEl.textContent = fullText;
+              streamEl.scrollTop = streamEl.scrollHeight;
+            } else if (data.type === 'done') {
+              // Render structured result
+              streamEl.style.display = 'none';
+              const r = data.result;
+              var html2 = '<div class="agent-result">';
+
+              html2 += '<div class="agent-field"><span class="agent-label">Summary</span><span class="agent-val">' + this._escapeHtml(r.summary) + '</span></div>';
+
+              if (r.responsibility) {
+                html2 += '<div class="agent-field"><span class="agent-label">Responsibility</span><span class="agent-val">' + this._escapeHtml(r.responsibility) + '</span></div>';
+              }
+
+              if (r.designPattern) {
+                html2 += '<div class="agent-field"><span class="agent-label">Pattern</span><span class="agent-val agent-pattern">' + this._escapeHtml(r.designPattern) + '</span></div>';
+              }
+
+              if (r.relatedModules && r.relatedModules.length) {
+                html2 += '<div class="agent-field"><span class="agent-label">Related</span><div class="agent-related">';
+                for (var i = 0; i < r.relatedModules.length; i++) {
+                  html2 += '<code>' + this._escapeHtml(r.relatedModules[i]) + '</code>';
+                }
+                html2 += '</div></div>';
+              }
+
+              html2 += '</div>';
+              // Find .detail-section and append result below its label
+              var section = resultEl.querySelector('.detail-section');
+              section.innerHTML = '<div class="detail-label">Agent Analysis</div>' + html2;
+            } else if (data.type === 'error') {
+              resultEl.innerHTML = '<div class="agent-error">' + this._escapeHtml(data.text) + '</div>';
+            }
+          }
+        }
+      }
+    } catch (err) {
+      resultEl.innerHTML = '<div class="agent-error">Request failed: ' + this._escapeHtml(err.message) + '</div>';
+    }
+  }
+
+  _escapeHtml(str) {
+    if (!str) return '';
+    var d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
   }
 
   // ─── Activity Log ───
@@ -452,10 +563,7 @@ class App {
     entry.dataset.type = type;
     const time = new Date().toLocaleTimeString('en', { hour12: false });
     const label = type.replace('agent:', '').replace('edit-counts:', '').replace('project:', '');
-    entry.innerHTML = `
-      <span class="log-time">${time}</span>
-      <span class="log-evt">${label}</span>
-      <span class="log-path">${message}</span>`;
+    entry.innerHTML = '<span class="log-time">' + time + '</span><span class="log-evt">' + label + '</span><span class="log-path">' + message + '</span>';
     container.appendChild(entry);
     container.scrollTop = container.scrollHeight;
     while (container.children.length > 300) container.removeChild(container.firstChild);
@@ -464,7 +572,6 @@ class App {
   // ─── UI Initialization ───
 
   _initUI() {
-    // Path input — paste path + Enter
     const pathInput = document.getElementById('projectPathInput');
     if (pathInput) {
       pathInput.addEventListener('keydown', (e) => {
@@ -475,7 +582,6 @@ class App {
       });
     }
 
-    // View toggle
     document.querySelectorAll('.view-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (btn.dataset.view === this.currentView) return;
@@ -483,11 +589,10 @@ class App {
         document.querySelectorAll('.view-btn').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         if (this.analysisData) this._renderGraph(this.analysisData);
-        this._log('info', `View: ${this.currentView}`);
+        this._log('info', 'View: ' + this.currentView);
       });
     });
 
-    // Tree filter
     document.getElementById('treeFilter')?.addEventListener('input', (e) => {
       const q = e.target.value.toLowerCase();
       document.querySelectorAll('.tree-item').forEach((el) => {
@@ -495,7 +600,6 @@ class App {
       });
     });
 
-    // Log controls
     document.getElementById('btnClearLog')?.addEventListener('click', () => {
       document.getElementById('logContainer').innerHTML = '';
     });

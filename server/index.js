@@ -33,6 +33,13 @@ function broadcast(data) {
 
 // ─── Middleware ───
 app.use(express.json({ limit: '10mb' }));
+// Disable caching for client JS/CSS so browser always gets latest
+app.use((req, res, next) => {
+  if (req.path.endsWith('.js') || req.path.endsWith('.css')) {
+    res.setHeader('Cache-Control', 'no-store, must-revalidate');
+  }
+  next();
+});
 app.use(express.static(join(ROOT, 'client')));
 
 // ─── REST: Project ───
@@ -98,6 +105,111 @@ app.get('/api/llm/descriptions', (req, res) => {
 app.get('/api/llm/logs', (req, res) => {
   if (!llmService) return res.json([]);
   res.json(llmService.getLogs());
+});
+
+// ─── REST: F13 Node Inquiry Agent ───
+
+app.post('/api/agent/ask-node', async (req, res) => {
+  if (!llmService || !llmService.isEnabled()) {
+    return res.status(400).json({ error: 'LLM not configured. Add .vibe-guarding.json with apiKey.' });
+  }
+  if (!analyzer) {
+    return res.status(400).json({ error: 'No project open' });
+  }
+
+  const { path: filePath, role } = req.body;
+  if (!filePath) {
+    return res.status(400).json({ error: 'Missing file path' });
+  }
+
+  try {
+    // Read full file content
+    const fullPath = join(projectRoot, filePath);
+    let fullContent = '';
+    if (fs.existsSync(fullPath)) {
+      fullContent = fs.readFileSync(fullPath, 'utf-8');
+    }
+
+    // Gather imports/importedBy from analysis
+    const analysis = analyzer.analyze();
+    const node = analysis.nodes.find((n) => n.path === filePath);
+    const imports = node?.imports || [];
+    const importedBy = [];
+    for (const e of analysis.edges) {
+      const src = typeof e.source === 'object' ? e.source.path : e.source;
+      const tgt = typeof e.target === 'object' ? e.target.path : e.target;
+      if (tgt === filePath) importedBy.push(src);
+    }
+
+    const result = await llmService.askNode({
+      path: filePath,
+      role: role || node?.role || 'unknown',
+      imports,
+      importedBy,
+      fullContent,
+    });
+
+    res.json(result);
+  } catch (e) {
+    console.error('\x1b[31m  [ask-node] Error:\x1b[0m', e.message);
+    res.status(500).json({ error: 'LLM request failed', detail: e.message });
+  }
+});
+
+// ─── F13 Streaming Agent (SSE) ───
+
+app.post('/api/agent/ask-node/stream', (req, res) => {
+  if (!llmService || !llmService.isEnabled()) {
+    return res.status(400).json({ error: 'LLM not configured' });
+  }
+  if (!analyzer) {
+    return res.status(400).json({ error: 'No project open' });
+  }
+
+  const { path: filePath, role } = req.body;
+  if (!filePath) {
+    return res.status(400).json({ error: 'Missing file path' });
+  }
+
+  // SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  // Read full file content
+  const fullPath = join(projectRoot, filePath);
+  let fullContent = '';
+  if (fs.existsSync(fullPath)) {
+    fullContent = fs.readFileSync(fullPath, 'utf-8');
+  }
+
+  // Gather imports/importedBy from analysis
+  const analysis = analyzer.analyze();
+  const node = analysis.nodes.find((n) => n.path === filePath);
+  const imports = node?.imports || [];
+  const importedBy = [];
+  for (const e of analysis.edges) {
+    const src = typeof e.source === 'object' ? e.source.path : e.source;
+    const tgt = typeof e.target === 'object' ? e.target.path : e.target;
+    if (tgt === filePath) importedBy.push(src);
+  }
+
+  llmService.streamAskNode({
+    path: filePath,
+    role: role || node?.role || 'unknown',
+    imports,
+    importedBy,
+    fullContent,
+  }, res).catch((e) => {
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message });
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'error', text: e.message })}\n\n`);
+      res.end();
+    }
+  });
 });
 
 // ─── WebSocket ───

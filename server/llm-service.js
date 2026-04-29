@@ -101,6 +101,41 @@ export class LlmService {
   }
 
   /**
+   * F13 — Single-node inquiry. Reads full file content, calls LLM for architectural analysis.
+   * @param {Object} ctx - { path, role, imports, importedBy, fullContent }
+   * @returns {Object} { summary, responsibility, designPattern, relatedModules }
+   */
+  async askNode(ctx) {
+    if (!this.config) {
+      throw new Error('LLM not configured. Add .vibe-guarding.json with apiKey.');
+    }
+    const prompt = this._buildAskPrompt(ctx);
+    return this._callLlmSingle(prompt);
+  }
+
+  /**
+   * F13 — Streaming single-node inquiry. Sends SSE events to `res`.
+   * Events: {type:"chunk",text:"..."} | {type:"done",result:{...}} | {type:"error",text:"..."}
+   */
+  async streamAskNode(ctx, res) {
+    if (!this.config) {
+      res.write(`data: ${JSON.stringify({ type: 'error', text: 'LLM not configured' })}\n\n`);
+      res.end();
+      return;
+    }
+    const prompt = this._buildAskPrompt(ctx);
+
+    if (this.config.provider === 'openai') {
+      await this._callOpenAIStream(prompt, res);
+    } else if (this.config.provider === 'anthropic') {
+      await this._callAnthropicStream(prompt, res);
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'error', text: `Unknown provider: ${this.config.provider}` })}\n\n`);
+      res.end();
+    }
+  }
+
+  /**
    * Trigger async generation. Non-blocking — caller should not await.
    * @param {Array} nodes - analysis nodes from ProjectAnalyzer
    */
@@ -157,6 +192,17 @@ export class LlmService {
 
   // ─── LLM Call ───
 
+  async _callLlmSingle(prompt) {
+    if (this.config.provider === 'openai') {
+      return this._callOpenAISingle(prompt);
+    } else if (this.config.provider === 'anthropic') {
+      return this._callAnthropicSingle(prompt);
+    } else {
+      this._addLog('error', `Unknown provider: ${this.config.provider}`);
+      return null;
+    }
+  }
+
   async _callLlm(batch) {
     const prompt = this._buildPrompt(batch);
 
@@ -190,6 +236,42 @@ Return ONLY valid JSON matching this exact schema, no extra text:
 }`;
   }
 
+  // ─── F13 Ask-Node Prompt ───
+
+  _buildAskPrompt({ path, role, imports, importedBy, fullContent }) {
+    const truncated = fullContent && fullContent.length > 6000
+      ? fullContent.slice(0, 6000) + '\n... [truncated]'
+      : fullContent || '';
+
+    return `You are a professional software architect. Analyze the following file and explain its role in the project. CRITICAL: You MUST answer in Simplified Chinese. All text fields must be in Chinese, NOT English.
+
+File: ${path}
+Role: ${role}
+Imports: ${(imports || []).join(', ') || 'none'}
+Imported by: ${(importedBy || []).join(', ') || 'none'}
+
+File content:
+\`\`\`
+${truncated}
+\`\`\`
+
+STRICTLY output ONLY a valid JSON object. No markdown, no headings, no code fences, no extra text. Output raw JSON directly. ALL text values MUST be in Simplified Chinese:
+{
+  "summary": "用简体中文一句话概括文件功能，不超过100字",
+  "responsibility": "用简体中文描述核心职责，不超过200字",
+  "designPattern": "填写设计模式名称如 单例模式/控制器/工具类 或 null，不超过50字",
+  "relatedModules": ["相对路径/到/相关/文件1", "相对路径/到/相关/文件2"]
+`;
+  }
+
+  _getOpenAIEndpoint() {
+    if (this.config.apiBase) {
+      const url = new URL(this.config.apiBase.replace(/\/+$/, '') + '/chat/completions');
+      return { hostname: url.hostname, path: url.pathname };
+    }
+    return { hostname: 'api.openai.com', path: '/v1/chat/completions' };
+  }
+
   _callOpenAI(prompt) {
     return new Promise((resolve, reject) => {
       const model = this.config.model || 'gpt-4o-mini';
@@ -200,9 +282,10 @@ Return ONLY valid JSON matching this exact schema, no extra text:
         response_format: { type: 'json_object' },
       });
 
+      const ep = this._getOpenAIEndpoint();
       const options = {
-        hostname: 'api.openai.com',
-        path: '/v1/chat/completions',
+        hostname: ep.hostname,
+        path: ep.path,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -236,11 +319,154 @@ Return ONLY valid JSON matching this exact schema, no extra text:
         },
       };
 
-      this._request(options, body, resolve, reject, 'anthropic');
+      this._request(options, body, resolve, reject, 'anthropic', false);
     });
   }
 
-  _request(options, body, resolve, reject, provider = 'openai') {
+  // ─── Streaming variants for F13 ───
+
+  _callOpenAIStream(prompt, res) {
+    return new Promise((resolve) => {
+      const model = this.config.model || 'gpt-4o-mini';
+      const body = JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: 'You are a JSON-only API. Return ONLY valid JSON matching the requested schema. Never include markdown, headings, explanations, or any text outside the JSON object.' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.1,
+        stream: true,
+      });
+
+      const ep = this._getOpenAIEndpoint();
+      const options = {
+        hostname: ep.hostname,
+        path: ep.path,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+
+      const req = https.request(options, (llmRes) => {
+        let buf = '';
+        let fullContent = '';
+
+        llmRes.on('data', (chunk) => {
+          buf += chunk.toString();
+          const lines = buf.split('\n');
+          buf = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6).trim();
+            if (payload === '[DONE]') continue;
+            try {
+              const parsed = JSON.parse(payload);
+              const content = parsed.choices?.[0]?.delta?.content || '';
+              if (content) {
+                fullContent += content;
+                res.write(`data: ${JSON.stringify({ type: 'chunk', text: content })}\n\n`);
+              }
+            } catch (_) { /* skip partial lines */ }
+          }
+        });
+
+        llmRes.on('end', () => {
+          // Parse accumulated content as JSON and send structured result
+          try {
+            const cleaned = fullContent.replace(/```json\n?|\n?```/g, '').trim();
+            const result = JSON.parse(cleaned);
+            const allowed = ['summary', 'responsibility', 'designPattern', 'relatedModules'];
+            const filtered = {};
+            for (const key of allowed) {
+              if (result[key] !== undefined) filtered[key] = result[key];
+            }
+            res.write(`data: ${JSON.stringify({ type: 'done', result: filtered })}\n\n`);
+          } catch (e) {
+            // If JSON parsing fails, send the raw content
+            res.write(`data: ${JSON.stringify({ type: 'done', result: { summary: fullContent } })}\n\n`);
+          }
+          res.end();
+          resolve();
+        });
+      });
+
+      req.on('error', (e) => {
+        res.write(`data: ${JSON.stringify({ type: 'error', text: e.message })}\n\n`);
+        res.end();
+        resolve();
+      });
+
+      req.write(body);
+      req.end();
+    });
+  }
+
+  _callAnthropicStream(prompt, res) {
+    // Fallback: non-streaming for Anthropic via the single-call variant
+    this._callAnthropicSingle(prompt)
+      .then((result) => {
+        res.write(`data: ${JSON.stringify({ type: 'done', result })}\n\n`);
+        res.end();
+      })
+      .catch((e) => {
+        res.write(`data: ${JSON.stringify({ type: 'error', text: e.message })}\n\n`);
+        res.end();
+      });
+  }
+
+  // F13 single-call variants — return full JSON object, not mappings array
+  _callOpenAISingle(prompt) {
+    return new Promise((resolve, reject) => {
+      const model = this.config.model || 'gpt-4o-mini';
+      const body = JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+      });
+      const ep = this._getOpenAIEndpoint();
+      const options = {
+        hostname: ep.hostname,
+        path: ep.path,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.config.apiKey}`,
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+      this._request(options, body, resolve, reject, 'openai', true);
+    });
+  }
+
+  _callAnthropicSingle(prompt) {
+    return new Promise((resolve, reject) => {
+      const model = this.config.model || 'claude-haiku-4-5-20251001';
+      const body = JSON.stringify({
+        model,
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      const options = {
+        hostname: 'api.anthropic.com',
+        path: '/v1/messages',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.config.apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+      this._request(options, body, resolve, reject, 'anthropic', true);
+    });
+  }
+
+  _request(options, body, resolve, reject, provider = 'openai', raw = false) {
     const timer = setTimeout(() => {
       req.destroy();
       reject(new Error('LLM request timeout (30s)'));
@@ -268,7 +494,11 @@ Return ONLY valid JSON matching this exact schema, no extra text:
           // Parse JSON — handle markdown code fences
           const cleaned = content.replace(/```json\n?|\n?```/g, '').trim();
           const parsed = JSON.parse(cleaned);
-          resolve(parsed.mappings || []);
+          if (raw) {
+            resolve(parsed);
+          } else {
+            resolve(parsed.mappings || []);
+          }
         } catch (e) {
           reject(new Error(`Parse error: ${e.message}`));
         }
