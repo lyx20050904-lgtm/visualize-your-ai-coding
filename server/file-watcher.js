@@ -10,8 +10,10 @@ const IGNORE_PATTERNS = [
   /\.vibe-guarding-cache\.json/
 ];
 
-// Session debounce window: 500ms — consecutive changes within this window = 1 session
-const SESSION_DEBOUNCE_MS = 500;
+// Session debounce window: 2500ms — long enough for human visual perception
+// AI agents typically write a file once per edit, so the 500ms window was too short
+// and the editing glow would disappear before the user could notice it.
+const SESSION_DEBOUNCE_MS = 2500;
 
 export class ProjectWatcher {
   constructor(root, broadcast) {
