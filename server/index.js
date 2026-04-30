@@ -6,6 +6,7 @@ import { ProjectAnalyzer } from './project-analyzer.js';
 import { LlmService } from './llm-service.js';
 import { ProjectKnowledge } from './project-knowledge.js';
 import { ActivityStore } from './activity-store.js';
+import { AgentMonitor } from './agent-monitor.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -26,6 +27,7 @@ let analyzer = null;
 let llmService = null;
 let knowledgeBase = null;
 let activityStore = null;
+let agentMonitor = null;
 
 // ─── Broadcast (sync only — no async operations here) ───
 function broadcast(data) {
@@ -59,9 +61,10 @@ app.post('/api/project/open', (req, res) => {
     return res.status(400).json({ error: 'Path is not a directory' });
   }
 
-  // Tear down existing watchers and store
+  // Tear down existing watchers, store, and agent monitor
   if (watcher) watcher.close();
   if (activityStore) activityStore.destroy();
+  if (agentMonitor) { agentMonitor.destroy(); agentMonitor = null; }
 
   projectRoot = dirPath;
   activityStore = new ActivityStore(dirPath, broadcast);
@@ -136,6 +139,42 @@ app.post('/api/activity/clear', (req, res) => {
   if (!activityStore) return res.status(400).json({ error: 'No project open' });
   activityStore.clear();
   res.json({ ok: true });
+});
+
+// ─── F16: Agent Monitor ───
+
+app.post('/api/agent/monitor/start', (req, res) => {
+  if (!projectRoot) return res.status(400).json({ error: 'No project open' });
+  const { processName, pollInterval } = req.body || {};
+
+  if (agentMonitor) agentMonitor.destroy();
+
+  agentMonitor = new AgentMonitor(projectRoot, broadcast, activityStore);
+  if (processName) agentMonitor.configure({ processName });
+  if (pollInterval) agentMonitor.configure({ pollInterval });
+
+  // Read agent config from .vibe-guarding.json if present
+  const configPath = join(projectRoot, '.vibe-guarding.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      if (config.agent) agentMonitor.configure(config.agent);
+    } catch (_) {}
+  }
+
+  agentMonitor.start();
+  res.json({ ok: true, status: agentMonitor.getStatus() });
+});
+
+app.post('/api/agent/monitor/stop', (req, res) => {
+  if (!agentMonitor) return res.status(400).json({ error: 'Monitor not started' });
+  agentMonitor.stop();
+  res.json({ ok: true });
+});
+
+app.get('/api/agent/monitor/status', (req, res) => {
+  if (!agentMonitor) return res.json({ running: false });
+  res.json(agentMonitor.getStatus());
 });
 
 // ─── REST: F13 Node Inquiry Agent ───
@@ -267,6 +306,15 @@ wss.on('connection', (ws) => {
   });
   ws.on('error', (e) => {
     console.error('\x1b[31m  [ws] Error:\x1b[0m', e.message);
+  });
+  // Relay incoming WS messages to all connected clients (used by F16 test harness)
+  ws.on('message', (raw) => {
+    try {
+      const data = JSON.parse(raw.toString());
+      if (data.type && data.path) {
+        broadcast(data);
+      }
+    } catch (_) {}
   });
 });
 

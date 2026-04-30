@@ -37,6 +37,7 @@ class Visualizer {
 
     this.selectedId     = null;
     this.editingIds     = new Set();
+    this.readingIds     = new Set();
     this.editCounts     = {};
     this.readingCounts  = {};
     this._maxCount      = 1;
@@ -44,6 +45,8 @@ class Visualizer {
 
     // Editing state color — cyan, distinct from heat-orange and role colors
     this.C_EDITING = '#00D4FF';
+    // Reading state color — blue-purple, distinct from editing cyan
+    this.C_READING = '#7C8CFF';
 
     this._nodeSel = null;
     this._linkSel = null;
@@ -98,6 +101,15 @@ class Visualizer {
     em.append('feMergeNode').attr('in', 'SourceGraphic');
 
     // Heat glow tiers removed — handled by NeonPulse Canvas overlay
+
+    // F16: Reading glow — bigger spread for small nodes
+    const rf = defs.append('filter').attr('id', 'glow-reading')
+      .attr('x', '-600%').attr('y', '-600%').attr('width', '1300%').attr('height', '1300%');
+    rf.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '10').attr('result', 'b');
+    const rm = rf.append('feMerge');
+    rm.append('feMergeNode').attr('in', 'b');
+    rm.append('feMergeNode').attr('in', 'b');
+    rm.append('feMergeNode').attr('in', 'SourceGraphic');
 
     // Selection glow
     const sf = defs.append('filter').attr('id', 'glow-sel')
@@ -154,6 +166,8 @@ class Visualizer {
   }
 
   _nodeColor(d) {
+    // Reading state takes visual priority as base fill (editing glow overlaid via filter)
+    if (this.readingIds.has(d.id)) return this.C_READING;
     if (this.editingIds.has(d.id)) return this.C_EDITING;
     if (d.type === 'directory')    return '#fb923c';
     return this._roleColor(d.role);
@@ -169,8 +183,9 @@ class Visualizer {
   }
 
   _heatFilter(d) {
-    // Heat glow delegated to NeonPulse overlay — only editing + selection here
+    // Reading glow is layered separately; editing glow takes precedence visually
     if (this.editingIds.has(d.id)) return 'url(#glow-editing)';
+    if (this.readingIds.has(d.id)) return 'url(#glow-reading)';
     if (d.id === this.selectedId)  return 'url(#glow-sel)';
     return null;
   }
@@ -287,6 +302,53 @@ class Visualizer {
             .attr('opacity', (d) => d.type === 'directory' ? 1 : 0);
           // Filter changes immediately (URL-based, no meaningful interpolation)
           sel.select('.node-body').attr('filter', (d) => this._heatFilter(d));
+        }
+
+      } else if (type === 'agent:reading-start') {
+        this.readingIds.add(id);
+        this._refreshNodeColors(id);
+        const rg = this._nodeSel ? this._nodeSel.filter((d) => d.id === id) : null;
+        if (rg) {
+          rg.classed('reading', true);
+          // Scale up node + show label + thick ring
+          rg.select('.node-body')
+            .interrupt()
+            .transition().duration(300).ease(d3.easeCubicOut)
+            .attr('r', (d) => this._nodeR(d) * 1.8)
+            .attr('fill', this.C_READING)
+            .attr('filter', 'url(#glow-reading)');
+          rg.select('.breathing-ring')
+            .attr('r', (d) => this._nodeR(d) * 1.8 + 5)
+            .attr('stroke-width', '2.5')
+            .attr('stroke', '#7C8CFF')
+            .style('display', 'block');
+          rg.select('.node-label')
+            .interrupt()
+            .transition().duration(300).ease(d3.easeCubicOut)
+            .attr('fill', '#7C8CFF')
+            .attr('opacity', 1);
+        }
+
+      } else if (type === 'agent:reading-end') {
+        this.readingIds.delete(id);
+        const rg2 = this._nodeSel ? this._nodeSel.filter((d) => d.id === id) : null;
+        if (rg2) {
+          setTimeout(() => { rg2.classed('reading', false); }, 800);
+          rg2.select('.node-body')
+            .interrupt()
+            .transition().duration(800).ease(d3.easeCubicOut)
+            .attr('r', (d) => this._nodeR(d))
+            .attr('fill', (d) => this._nodeHeatColor(d))
+            .attr('filter', (d) => this._heatFilter(d));
+          rg2.select('.breathing-ring')
+            .attr('r', (d) => this._nodeR(d) * 1.2 + 3)
+            .attr('stroke-width', '1.5')
+            .style('display', 'none');
+          rg2.select('.node-label')
+            .interrupt()
+            .transition().duration(800).ease(d3.easeCubicOut)
+            .attr('fill', 'var(--text-muted)')
+            .attr('opacity', (d) => d.type === 'directory' ? 1 : 0);
         }
 
       } else if (type === 'file:changed') {

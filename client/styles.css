@@ -289,6 +289,7 @@ body {
 }
 
 .tree-item.editing-item .tree-name { color: var(--brand); }
+.tree-item.reading-item .tree-name { color: #7C8CFF; }
 
 /* Edit session count badge on tree item */
 .edit-badge {
@@ -504,6 +505,38 @@ body {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+/* ─── F16: Reading state animations ─── */
+
+@keyframes breathe-reading {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%      { opacity: 1;   transform: scale(1.08); }
+}
+
+@keyframes rotate-ring {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes ring-pulse {
+  0%, 100% { opacity: 0.6; r: var(--ring-r); }
+  50%      { opacity: 1;   r: calc(var(--ring-r) + 3); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
+
+/* D3 reading state — applied by visualizer.js */
+/* Animation only on the ring (rotation + opacity pulse). Node body handled by D3. */
+.vg-node.reading .breathing-ring {
+  stroke: #7C8CFF;
+  stroke-width: 2.5;
+  stroke-dasharray: 6,4;
+  animation: rotate-ring 3s linear infinite, ring-pulse 2s ease-in-out infinite;
+  filter: drop-shadow(0 0 4px rgba(124,140,255,0.6));
 }
 
 .details-content {
@@ -772,5 +805,109 @@ body {
 .log-entry[data-type="dir:deleted"]  .log-evt { color: var(--red); }
 .log-entry[data-type="project:opened"] .log-evt { color: var(--green); }
 .log-entry[data-type="info"]         .log-evt { color: var(--text-muted); }
+.log-entry[data-type="agent:reading-start"] .log-evt { color: #7C8CFF; }
+.log-entry[data-type="agent:reading-end"]   .log-evt { color: var(--text-muted); }
 
+/* ─── F16: Attention Radar Panel ─── */
 
+#radarPanel {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 8px 12px;
+  background: var(--surface-1);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+#radarPanel.visible { display: block; }
+
+.radar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.radar-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+}
+
+.radar-badge {
+  font-size: 9px;
+  color: #7C8CFF;
+  font-family: var(--font-mono);
+}
+
+.radar-list { list-style: none; margin: 0; padding: 0; }
+
+.radar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 11px;
+}
+
+.radar-item.active .radar-path {
+  color: #7C8CFF;
+}
+
+.radar-item .radar-path {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7C8CFF;
+  margin-right: 6px;
+  flex-shrink: 0;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.radar-dot.inactive {
+  background: var(--text-muted);
+  animation: none;
+}
+
+.radar-duration {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.radar-separator {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.radar-recent-header {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.radar-path-trace {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 4px;
+  padding: 2px 0;
+}

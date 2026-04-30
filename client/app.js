@@ -36,6 +36,13 @@ class App {
     this.LLM_POLL_MAX = 20;
     this.LLM_POLL_INTERVAL = 3000;
 
+    // F16: Attention Radar
+    this.activeReadings = new Map();  // path → startTime
+    this.recentReadings = [];         // { path, duration } ring buffer (max 10)
+    this.readingPathTrace = [];       // path history for trace display
+    this._radarRaf = null;
+    this._radarLastRender = 0;
+
     this._initUI();
     this._connect();
   }
@@ -111,6 +118,29 @@ class App {
           const n = this.visualizer.nodeMap[data.path];
           if (n) this.neonPulse.setEditing(data.path, false);
         }
+        break;
+
+      case 'agent:reading-start':
+        LogManager.log(data.type, data.path);
+        this._queueChange(data);
+        this.activeReadings.set(data.path, Date.now());
+        this._startRadarLoop();
+        // Highlight tree item
+        this._setTreeItemReading(data.path, true);
+        break;
+
+      case 'agent:reading-end':
+        LogManager.log(data.type, data.path);
+        this._queueChange(data);
+        this.activeReadings.delete(data.path);
+        // Add to recent readings ring buffer (max 10)
+        this.recentReadings.unshift({ path: data.path, duration: data.duration || 0 });
+        if (this.recentReadings.length > 10) this.recentReadings.pop();
+        // Add to path trace
+        this.readingPathTrace.push(data.path);
+        if (this.readingPathTrace.length > 20) this.readingPathTrace.shift();
+        // Remove tree highlight
+        this._setTreeItemReading(data.path, false);
         break;
 
       case 'activity:state':
@@ -499,6 +529,82 @@ class App {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  // ─── F16: Attention Radar Panel ───
+
+  _startRadarLoop() {
+    if (this._radarRaf) return;
+    const tick = () => {
+      this._renderRadarPanel();
+      if (this.activeReadings.size > 0) {
+        this._radarRaf = requestAnimationFrame(tick);
+      } else {
+        this._radarRaf = null;
+      }
+    };
+    this._radarRaf = requestAnimationFrame(tick);
+  }
+
+  _renderRadarPanel() {
+    const panel = document.getElementById('radarPanel');
+    if (!panel) return;
+
+    panel.classList.toggle('visible', this.activeReadings.size > 0 || this.recentReadings.length > 0);
+
+    const badge = document.getElementById('radarBadge');
+    if (badge) badge.textContent = this.activeReadings.size + ' reading';
+
+    // Active readings list
+    const activeList = document.getElementById('radarActiveList');
+    if (activeList) {
+      if (this.activeReadings.size > 0) {
+        let html = '';
+        const now = Date.now();
+        for (const [path, start] of this.activeReadings) {
+          const dur = now - start;
+          const label = dur < 1000 ? dur + 'ms' : (dur / 1000).toFixed(1) + 's';
+          html += '<li class="radar-item active">' +
+            '<span><span class="radar-dot"></span><span class="radar-path">' + this._escapeHtml(path) + '</span></span>' +
+            '<span class="radar-duration">' + label + '</span></li>';
+        }
+        activeList.innerHTML = html;
+      } else {
+        activeList.innerHTML = '';
+      }
+    }
+
+    // Recent readings list
+    const recentList = document.getElementById('radarRecentList');
+    if (recentList) {
+      if (this.recentReadings.length > 0) {
+        let html = '';
+        for (let i = 0; i < Math.min(this.recentReadings.length, 5); i++) {
+          const r = this.recentReadings[i];
+          const dur = r.duration || 0;
+          const label = dur < 1000 ? dur + 'ms' : (dur / 1000).toFixed(1) + 's';
+          html += '<li class="radar-item">' +
+            '<span><span class="radar-dot inactive"></span><span class="radar-path">' + this._escapeHtml(r.path) + '</span></span>' +
+            '<span class="radar-duration">' + label + '</span></li>';
+        }
+        recentList.innerHTML = html;
+      } else {
+        recentList.innerHTML = '';
+      }
+    }
+
+    // Path trace
+    const traceEl = document.getElementById('radarPathTrace');
+    if (traceEl && this.readingPathTrace.length > 1) {
+      traceEl.textContent = 'Trace: ' + this.readingPathTrace.slice(-6).join(' → ');
+    }
+  }
+
+  _setTreeItemReading(path, active) {
+    const node = this.analysisData?.nodes?.find((n) => n.path === path);
+    if (!node) return;
+    const el = document.querySelector('.tree-item[data-node-id="' + CSS.escape(node.id) + '"]');
+    if (el) el.classList.toggle('reading-item', active);
   }
 
   // ─── F13 Node Inquiry Agent (Streaming SSE) ───
