@@ -1,4 +1,4 @@
-/* F13 Agent Result — extracted from styles.css (927->837 LOC) */
+/* Extracted from styles.css — agent UI + D3 SVG legacy classes + global utilities */
 
 .agent-loading {
   color: var(--text-muted);
@@ -101,3 +101,62 @@
   word-break: break-all;
   margin-top: 6px;
 }
+
+/* ─── D3 SVG Legacy Classes ─── */
+
+.link {
+  fill: none;
+  stroke: rgba(255,255,255,0.06);
+  stroke-width: 1;
+  transition: opacity 0.3s;
+}
+
+.link.import-link {
+  stroke: rgba(255,107,53,0.18);
+  stroke-width: 1.2;
+  stroke-dasharray: none;
+}
+
+.link.contains-link {
+  stroke: rgba(255,255,255,0.04);
+  stroke-dasharray: 3,3;
+}
+
+.node-group {
+  cursor: pointer;
+}
+
+.node-group text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--text-muted);
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: #0a0908;
+  stroke-width: 3px;
+  transition: fill 0.3s;
+}
+
+.node-group:hover text { fill: var(--text-secondary); }
+.node-group.selected text { fill: var(--text-primary); }
+
+/* ─── Scrollbar ─── */
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+/* ─── Animations ─── */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.node-enter { animation: fadeIn 0.3s ease-out forwards; }
+
+/* ─── Responsive ─── */
+
+@media (max-width: 1100px) { #details { display: none; } }
+@media (max-width: 800px)  { #sidebar { display: none; } #logbar { height: 90px; } }
