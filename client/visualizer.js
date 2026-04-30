@@ -81,34 +81,37 @@ class Visualizer {
       .attr('fill', 'rgba(255,107,53,0.6)');
 
     // Layer 1 — real-time editing glow (intense)
+    // Filter region enlarged to -150%/400% so stdDeviation=12 never clips
     const ef = defs.append('filter').attr('id', 'glow-editing')
-      .attr('x', '-100%').attr('y', '-100%').attr('width', '300%').attr('height', '300%');
-    ef.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '7').attr('result', 'b');
+      .attr('x', '-150%').attr('y', '-150%').attr('width', '400%').attr('height', '400%');
+    ef.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '12').attr('result', 'b');
     const em = ef.append('feMerge');
     em.append('feMergeNode').attr('in', 'b');
     em.append('feMergeNode').attr('in', 'b');
     em.append('feMergeNode').attr('in', 'SourceGraphic');
 
-    // Layer 2 — heatmap glow tiers
+    // Layer 2 — heatmap glow tiers (stdDeviation bumped up, filter region enlarged)
     [
-      ['glow-heat-1', 3],
-      ['glow-heat-2', 5],
-      ['glow-heat-3', 8],
-      ['glow-heat-4', 11],
-      ['glow-heat-5', 14],
+      ['glow-heat-1',  6],
+      ['glow-heat-2', 10],
+      ['glow-heat-3', 14],
+      ['glow-heat-4', 18],
+      ['glow-heat-5', 22],
     ].forEach(([id, std]) => {
       const f = defs.append('filter').attr('id', id)
-        .attr('x', '-100%').attr('y', '-100%').attr('width', '300%').attr('height', '300%');
+        .attr('x', '-150%').attr('y', '-150%').attr('width', '400%').attr('height', '400%');
+      // Double-merge for brighter glow
       f.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', std).attr('result', 'b');
       const m = f.append('feMerge');
+      m.append('feMergeNode').attr('in', 'b');
       m.append('feMergeNode').attr('in', 'b');
       m.append('feMergeNode').attr('in', 'SourceGraphic');
     });
 
     // Selection glow
     const sf = defs.append('filter').attr('id', 'glow-sel')
-      .attr('x', '-80%').attr('y', '-80%').attr('width', '260%').attr('height', '260%');
-    sf.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '5').attr('result', 'b');
+      .attr('x', '-150%').attr('y', '-150%').attr('width', '400%').attr('height', '400%');
+    sf.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '8').attr('result', 'b');
     const sm = sf.append('feMerge');
     sm.append('feMergeNode').attr('in', 'b');
     sm.append('feMergeNode').attr('in', 'SourceGraphic');
@@ -281,8 +284,13 @@ class Visualizer {
           sel.select('.heat-ring')
             .interrupt()
             .transition().duration(500).ease(d3.easeCubicOut)
+            .attr('r', (d) => this._nodeR(d) * 1.8)
             .attr('fill', (d) => this._nodeHeatColor(d))
-            .attr('opacity', (d) => (this.editCounts[d.path] || 0) > 0 ? 0.6 : 0);
+            .attr('opacity', (d) => {
+              const c = this.editCounts[d.path] || 0;
+              if (!c) return 0;
+              return Math.min(0.65 + c * 0.015, 0.9);
+            });
           sel.select('.node-label')
             .interrupt()
             .transition().duration(500).ease(d3.easeCubicOut)
@@ -479,9 +487,10 @@ class Visualizer {
       .on('click',      (event, d)  => { event.stopPropagation(); this.selectNode(d.id); });
 
     // Heat ring (glow layer, behind body)
+    // Radius is larger than node-body so the blur expands visibly beyond the node edge
     nodeEnter.append('circle')
       .attr('class', 'heat-ring')
-      .attr('r', (d) => this._nodeR(d))
+      .attr('r', (d) => this._nodeR(d) * 1.8)
       .attr('fill', (d) => this._nodeHeatColor(d))
       .attr('stroke', 'none')
       .attr('pointer-events', 'none');
@@ -524,14 +533,17 @@ class Visualizer {
       .attr('filter', (d) => this._heatFilter(d));
 
     this._nodeSel.select('.heat-ring')
+      .attr('r', (d) => this._nodeR(d) * 1.8)
       .attr('fill', (d) => this._nodeHeatColor(d))
       .attr('filter', (d) => {
-        const c = this.editCounts[d.path] || 0;
         return this.editingIds.has(d.id) ? 'url(#glow-editing)' : this._heatFilter(d);
       })
       .attr('opacity', (d) => {
-        if (this.editingIds.has(d.id)) return 0.8;
-        return (this.editCounts[d.path] || 0) > 0 ? 0.6 : 0;
+        if (this.editingIds.has(d.id)) return 0.95;
+        const c = this.editCounts[d.path] || 0;
+        if (!c) return 0;
+        // Scale opacity with count: low=0.65, high=0.9
+        return Math.min(0.65 + c * 0.015, 0.9);
       });
 
     this._nodeSel.select('.node-label')
@@ -627,10 +639,13 @@ class Visualizer {
       .attr('filter', (d) => this._heatFilter(d));
 
     sel.select('.heat-ring')
+      .attr('r',       (d) => this._nodeR(d) * 1.8)
       .attr('fill',    (d) => this._nodeHeatColor(d))
       .attr('opacity', (d) => {
-        if (this.editingIds.has(d.id)) return 0.8;
-        return (this.editCounts[d.path] || 0) > 0 ? 0.6 : 0;
+        if (this.editingIds.has(d.id)) return 0.95;
+        const c = this.editCounts[d.path] || 0;
+        if (!c) return 0;
+        return Math.min(0.65 + c * 0.015, 0.9);
       })
       .attr('filter', (d) => this._heatFilter(d));
 
