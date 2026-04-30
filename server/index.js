@@ -65,6 +65,7 @@ app.post('/api/project/open', (req, res) => {
 
   projectRoot = dirPath;
   activityStore = new ActivityStore(dirPath, broadcast);
+  analyzer = new ProjectAnalyzer(dirPath);
   watcher = new ProjectWatcher(dirPath, broadcast, activityStore);
 
   // Initialize LLM service (isolated — never touches broadcast directly)

@@ -9,3 +9,4 @@ npm-debug.log*
 .llm-descriptions-cache.json
 .vibe-guarding.json
 .vibe-guarding-*.json
+.vibe-guarding-*.json.bak
