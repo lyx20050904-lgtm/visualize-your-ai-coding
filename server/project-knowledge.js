@@ -127,3 +127,4 @@ function _inferRoleFromExt(ext) {
   };
   return map[ext] || 'module';
 }
+

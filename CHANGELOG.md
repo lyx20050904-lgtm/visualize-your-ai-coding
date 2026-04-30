@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.3.0 (2026-04-30)
+
+### Features
+- **F00 — Activity Data Persistence**: Edit and read session counts now persist to `.vibe-guarding-activity.json` via the new `ActivityStore` module. Data survives server restarts and is loaded on project open.
+- **NeonPulse — SVG-native heat effect overlay**: Heat glow refactored from Canvas to SVG DOM (`neon-pulse.js`). Radial gradient auras and expanding pulse rings rendered inside the D3 zoom container, inheriting pan/zoom automatically with zero coordinate drift.
+
+### Bug Fixes
+- **Square clipping in editing glow**: Enlarged `glow-editing` SVG filter region from `-150%/400%` to `-600%/1300%` and reduced `stdDeviation` from 18 to 6, eliminating the visible square truncation artifact.
+- **File-watcher self-triggering**: Added ignore patterns for `.vibe-guarding-*.json` files to prevent edit sessions from being created on activity data writes.
+- **Editing color vs heat color conflict**: Changed editing state highlight from orange (`#FFAA6B`) to cyan (`#00D4FF`) to visually distinguish it from heat-driven orange shifts on existing nodes.
+
+### Engineering
+- **F00 Acceptance tests**: 8 automated tests covering persistence lifecycle (write, load, clear, cross-session) all passing.
+- **Code cleanup**: Removed deprecated Canvas overlay code and SVG heat glow tiers, consolidated visual effects in NeonPulse.
+
+### Architecture
+- `server/activity-store.js` — new module for file-backed edit session persistence
+- `client/neon-pulse.js` — new module for SVG-based heat glow overlay (aura + ring effects)
+
 ## v1.2.0 (2026-04-29)
 
 ### Features
@@ -21,3 +40,4 @@
 - `server/project-knowledge.js` — new module for local-only structural metrics (no LLM calls)
 - `client/app-log.js` — new module with ring-buffered log manager
 - `server/llm-service.js` — streaming SSE support via `streamAskNode()` with dual OpenAI/Anthropic streaming paths
+

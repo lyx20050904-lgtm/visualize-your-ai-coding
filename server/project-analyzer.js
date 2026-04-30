@@ -223,3 +223,4 @@ export class ProjectAnalyzer {
     return { nodes, edges, roles, root: this.root };
   }
 }
+

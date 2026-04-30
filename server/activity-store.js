@@ -155,3 +155,4 @@ export class ActivityStore {
     } catch (_) {}
   }
 }
+

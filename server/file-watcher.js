@@ -7,7 +7,9 @@ const IGNORE_PATTERNS = [
   /dist/, /build/, /\.turbo/, /\.nyc_output/,
   /coverage/, /\.vscode/, /\.idea/,
   /\.DS_Store/, /yarn-error\.log/, /package-lock\.json/,
-  /\.vibe-guarding-cache\.json/
+  /\.vibe-guarding-cache\.json/,
+  /\.vibe-guarding-activity\.json/,
+  /\.vibe-guarding-knowledge\.json/
 ];
 
 // Session debounce window: 2500ms — long enough for human visual perception
@@ -145,3 +147,4 @@ export class ProjectWatcher {
     console.log(chalk.yellow('  Watcher stopped.'));
   }
 }
+

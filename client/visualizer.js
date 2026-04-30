@@ -42,12 +42,18 @@ class Visualizer {
     this._maxCount      = 1;
     this.descriptions   = {};
 
+    // Editing state color — cyan, distinct from heat-orange and role colors
+    this.C_EDITING = '#00D4FF';
+
     this._nodeSel = null;
     this._linkSel = null;
     this._minimapTick = 0;
 
     this.onNodeClick = null;
     this.onDeselect  = null;
+
+    // NeonPulse overlay — set by App after construction
+    this.neonPulse = null;
 
     // F06: 30s heat refresh cycle — bulk DOM update, not per-event
     this._heatDirty = false;
@@ -80,33 +86,18 @@ class Visualizer {
       .attr('d', 'M0,0 L8,4 L0,8 Z')
       .attr('fill', 'rgba(255,107,53,0.6)');
 
-    // Layer 1 — real-time editing glow (intense)
-    // Filter region enlarged to -150%/400% so stdDeviation=12 never clips
+    // Layer 1 — real-time editing glow (tight cyan pulse)
+    // Filter region -600%/1300% accommodates the full blur spread so it never
+    // clips to a visible square (previous -150%/400% was too tight for 18px σ).
     const ef = defs.append('filter').attr('id', 'glow-editing')
-      .attr('x', '-150%').attr('y', '-150%').attr('width', '400%').attr('height', '400%');
-    ef.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '12').attr('result', 'b');
+      .attr('x', '-600%').attr('y', '-600%').attr('width', '1300%').attr('height', '1300%');
+    ef.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', '6').attr('result', 'b');
     const em = ef.append('feMerge');
     em.append('feMergeNode').attr('in', 'b');
     em.append('feMergeNode').attr('in', 'b');
     em.append('feMergeNode').attr('in', 'SourceGraphic');
 
-    // Layer 2 — heatmap glow tiers (stdDeviation bumped up, filter region enlarged)
-    [
-      ['glow-heat-1',  6],
-      ['glow-heat-2', 10],
-      ['glow-heat-3', 14],
-      ['glow-heat-4', 18],
-      ['glow-heat-5', 22],
-    ].forEach(([id, std]) => {
-      const f = defs.append('filter').attr('id', id)
-        .attr('x', '-150%').attr('y', '-150%').attr('width', '400%').attr('height', '400%');
-      // Double-merge for brighter glow
-      f.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', std).attr('result', 'b');
-      const m = f.append('feMerge');
-      m.append('feMergeNode').attr('in', 'b');
-      m.append('feMergeNode').attr('in', 'b');
-      m.append('feMergeNode').attr('in', 'SourceGraphic');
-    });
+    // Heat glow tiers removed — handled by NeonPulse Canvas overlay
 
     // Selection glow
     const sf = defs.append('filter').attr('id', 'glow-sel')
@@ -163,7 +154,7 @@ class Visualizer {
   }
 
   _nodeColor(d) {
-    if (this.editingIds.has(d.id)) return '#FF6B35';
+    if (this.editingIds.has(d.id)) return this.C_EDITING;
     if (d.type === 'directory')    return '#fb923c';
     return this._roleColor(d.role);
   }
@@ -178,15 +169,10 @@ class Visualizer {
   }
 
   _heatFilter(d) {
+    // Heat glow delegated to NeonPulse overlay — only editing + selection here
     if (this.editingIds.has(d.id)) return 'url(#glow-editing)';
     if (d.id === this.selectedId)  return 'url(#glow-sel)';
-    const c = this.editCounts[d.path] || 0;
-    if (!c)   return null;
-    if (c <= 2)  return 'url(#glow-heat-1)';
-    if (c <= 5)  return 'url(#glow-heat-2)';
-    if (c <= 10) return 'url(#glow-heat-3)';
-    if (c <= 20) return 'url(#glow-heat-4)';
-    return 'url(#glow-heat-5)';
+    return null;
   }
 
   // ─── Public API ───
@@ -267,11 +253,22 @@ class Visualizer {
         this._refreshNodeColors(id);
         // F14: add breathing ring class
         const g = this._nodeSel ? this._nodeSel.filter((d) => d.id === id) : null;
-        if (g) g.classed('editing', true);
+        if (g) {
+          g.classed('editing', true);
+          // Pulse node body to 1.5x radius on editing-start
+          g.select('.node-body')
+            .interrupt()
+            .transition().duration(150).ease(d3.easeBackOut.overshoot(2))
+            .attr('r', (d) => this._nodeR(d) * 1.5)
+            .transition().duration(200).ease(d3.easeCubicOut)
+            .attr('r', (d) => this._nodeR(d) * 1.2);
+          g.select('.breathing-ring')
+            .attr('r', (d) => this._nodeR(d) * 1.2 + 3);
+        }
 
       } else if (type === 'agent:editing-end') {
         this.editingIds.delete(id);
-        // D3 transition: smooth 500ms ease-out from #FF6B35 to normal color
+        // D3 transition: smooth 500ms ease-out from C_EDITING to normal color
         // No setTimeout — D3 handles interpolation frame-by-frame
         const sel = this._nodeSel ? this._nodeSel.filter((d) => d.id === id) : null;
         if (sel) {
@@ -280,17 +277,9 @@ class Visualizer {
           sel.select('.node-body')
             .interrupt()
             .transition().duration(500).ease(d3.easeCubicOut)
+            .attr('r', (d) => this._nodeR(d))
             .attr('fill', (d) => this._nodeHeatColor(d));
-          sel.select('.heat-ring')
-            .interrupt()
-            .transition().duration(500).ease(d3.easeCubicOut)
-            .attr('r', (d) => this._nodeR(d) * 1.8)
-            .attr('fill', (d) => this._nodeHeatColor(d))
-            .attr('opacity', (d) => {
-              const c = this.editCounts[d.path] || 0;
-              if (!c) return 0;
-              return Math.min(0.65 + c * 0.015, 0.9);
-            });
+          // heat-ring transition removed — NeonPulse handles it
           sel.select('.node-label')
             .interrupt()
             .transition().duration(500).ease(d3.easeCubicOut)
@@ -298,7 +287,6 @@ class Visualizer {
             .attr('opacity', (d) => d.type === 'directory' ? 1 : 0);
           // Filter changes immediately (URL-based, no meaningful interpolation)
           sel.select('.node-body').attr('filter', (d) => this._heatFilter(d));
-          sel.select('.heat-ring').attr('filter', (d) => this._heatFilter(d));
         }
 
       } else if (type === 'file:changed') {
@@ -392,6 +380,7 @@ class Visualizer {
 
   _tick() {
     if (!this._linkSel || !this._nodeSel) return;
+    this._pushToNeonPulse();
 
     this._linkSel.attr('d', (d) => {
       // Resolve via nodeMap — forceLink resolves simEdges in-place, but DOM
@@ -486,21 +475,14 @@ class Visualizer {
       .on('mouseleave', ()          => { this._hideTooltip(); this._hoverDim(null, false); })
       .on('click',      (event, d)  => { event.stopPropagation(); this.selectNode(d.id); });
 
-    // Heat ring (glow layer, behind body)
-    // Radius is larger than node-body so the blur expands visibly beyond the node edge
-    nodeEnter.append('circle')
-      .attr('class', 'heat-ring')
-      .attr('r', (d) => this._nodeR(d) * 1.8)
-      .attr('fill', (d) => this._nodeHeatColor(d))
-      .attr('stroke', 'none')
-      .attr('pointer-events', 'none');
+    // Heat ring removed — NeonPulse Canvas overlay handles heat glow
 
     // F14: Breathing ring (visible only when .editing class is active)
     nodeEnter.append('circle')
       .attr('class', 'breathing-ring')
       .attr('r', (d) => this._nodeR(d) + 3)
       .attr('fill', 'none')
-      .attr('stroke', '#FF6B35')
+      .attr('stroke', this.C_EDITING)
       .attr('stroke-width', 2)
       .attr('opacity', 0)
       .attr('pointer-events', 'none');
@@ -532,19 +514,7 @@ class Visualizer {
       .attr('fill', (d) => this._nodeHeatColor(d))
       .attr('filter', (d) => this._heatFilter(d));
 
-    this._nodeSel.select('.heat-ring')
-      .attr('r', (d) => this._nodeR(d) * 1.8)
-      .attr('fill', (d) => this._nodeHeatColor(d))
-      .attr('filter', (d) => {
-        return this.editingIds.has(d.id) ? 'url(#glow-editing)' : this._heatFilter(d);
-      })
-      .attr('opacity', (d) => {
-        if (this.editingIds.has(d.id)) return 0.95;
-        const c = this.editCounts[d.path] || 0;
-        if (!c) return 0;
-        // Scale opacity with count: low=0.65, high=0.9
-        return Math.min(0.65 + c * 0.015, 0.9);
-      });
+    // heat-ring sync removed — NeonPulse handles it
 
     this._nodeSel.select('.node-label')
       .attr('dx', (d) => this._nodeR(d) + 5)
@@ -638,19 +608,10 @@ class Visualizer {
       .attr('fill',   (d) => this._nodeHeatColor(d))
       .attr('filter', (d) => this._heatFilter(d));
 
-    sel.select('.heat-ring')
-      .attr('r',       (d) => this._nodeR(d) * 1.8)
-      .attr('fill',    (d) => this._nodeHeatColor(d))
-      .attr('opacity', (d) => {
-        if (this.editingIds.has(d.id)) return 0.95;
-        const c = this.editCounts[d.path] || 0;
-        if (!c) return 0;
-        return Math.min(0.65 + c * 0.015, 0.9);
-      })
-      .attr('filter', (d) => this._heatFilter(d));
+    // heat-ring refresh removed — NeonPulse handles it
 
     sel.select('.node-label')
-      .attr('fill', (d) => this.editingIds.has(d.id) ? '#FF6B35' : 'var(--text-muted)')
+      .attr('fill', (d) => this.editingIds.has(d.id) ? this.C_EDITING : 'var(--text-muted)')
       .attr('opacity', (d) => (this.editingIds.has(d.id) || d.type === 'directory') ? 1 : 0);
   }
 
@@ -724,7 +685,7 @@ class Visualizer {
       <div class="tt-row">
         <span class="tt-role">${d.role || d.type}</span>
         ${sessions > 0 ? `<span class="tt-sessions">⦿ ${sessions} sessions</span>` : ''}
-        ${this.editingIds.has(d.id) ? `<span class="tt-sessions" style="color:#FF6B35">● editing</span>` : ''}
+        ${this.editingIds.has(d.id) ? `<span class="tt-sessions" style="color:${this.C_EDITING}">● editing</span>` : ''}
       </div>
       ${llmName ? `<div class="tt-desc"><strong>${llmName}</strong>${llmMeta ? '<br>' + llmMeta : ''}</div>` : ''}
     `;
@@ -784,7 +745,8 @@ class Visualizer {
       .attr('cy', (d) => ((d.y ?? 0) - minY) * s + oy)
       .attr('r', 1.8)
       .attr('fill', (d) => {
-        if (d.id === this.selectedId || this.editingIds.has(d.id)) return '#FF6B35';
+        if (d.id === this.selectedId)                              return '#FF6B35';
+        if (this.editingIds.has(d.id))                             return this.C_EDITING;
         return this._nodeColor(d);
       });
 
@@ -812,9 +774,26 @@ class Visualizer {
       .call(this.zoom.transform, d3.zoomIdentity.translate(this.width / 2 - gx, this.height / 2 - gy));
   }
 
+  // ─── NeonPulse sync ───
+
+  _pushToNeonPulse() {
+    if (!this.neonPulse) return;
+    const nodeData = this.nodes.map((n) => ({
+      id:      n.id,
+      x:       n.x ?? 0,
+      y:       n.y ?? 0,
+      r:       this._nodeR(n),
+      color:   this._nodeColor(n),
+      heat:    this.editCounts[n.path] || 0,
+      editing: this.editingIds.has(n.id),
+    }));
+    this.neonPulse.update(nodeData);
+  }
+
   destroy() {
     if (this.simulation) this.simulation.stop();
     clearInterval(this._heatTimer);
+    if (this.neonPulse) this.neonPulse.destroy();
   }
 }
 
@@ -837,3 +816,4 @@ function _inferRoleFromExt(filePath) {
   };
   return map[ext] || 'unknown';
 }
+

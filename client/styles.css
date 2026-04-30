@@ -313,7 +313,7 @@ body {
 #canvas {
   flex: 1;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   background:
     radial-gradient(circle at 50% 40%, rgba(255,107,53,0.03) 0%, transparent 60%),
     #0a0908;
@@ -772,4 +772,5 @@ body {
 .log-entry[data-type="dir:deleted"]  .log-evt { color: var(--red); }
 .log-entry[data-type="project:opened"] .log-evt { color: var(--green); }
 .log-entry[data-type="info"]         .log-evt { color: var(--text-muted); }
+
 

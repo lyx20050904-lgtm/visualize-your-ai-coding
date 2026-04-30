@@ -137,8 +137,10 @@
 </footer>
 
 <script src="/app-log.js"></script>
+<script src="/neon-pulse.js"></script>
 <script src="/app.js"></script>
 <script src="/visualizer.js"></script>
-<script>document.addEventListener('DOMContentLoaded', () => new App());</script>
+<script>document.addEventListener('DOMContentLoaded', () => { window._app = new App(); });</script>
 </body>
 </html>
+

@@ -24,6 +24,7 @@ class App {
     this.readingCounts = {};
 
     this.currentView = 'dev'; // 'dev' | 'simple'
+    this.neonPulse = null;
 
     // Batched incremental updates
     this.pendingChanges = [];
@@ -96,11 +97,20 @@ class App {
       case 'agent:editing-start':
         LogManager.log(data.type, data.path);
         this._queueChange(data);
+        // Immediate NeonPulse burst — no batching delay for visual impact
+        if (this.neonPulse && this.visualizer) {
+          const n = this.visualizer.nodeMap[data.path];
+          if (n) this.neonPulse.setEditing(data.path, true);
+        }
         break;
 
       case 'agent:editing-end':
         LogManager.log(data.type, data.path);
         this._queueChange(data);
+        if (this.neonPulse && this.visualizer) {
+          const n = this.visualizer.nodeMap[data.path];
+          if (n) this.neonPulse.setEditing(data.path, false);
+        }
         break;
 
       case 'activity:state':
@@ -110,6 +120,11 @@ class App {
           this.visualizer.setEditCounts(this.editCounts);
           this.visualizer.setReadingCounts(this.readingCounts);
         }
+        if (this.neonPulse && this.visualizer) {
+          const pathToId = {};
+          for (const n of (this.visualizer.nodes || [])) pathToId[n.path] = n.id;
+          this.neonPulse.setHeat(this.editCounts, pathToId);
+        }
         this._refreshTreeBadges();
         break;
 
@@ -117,6 +132,12 @@ class App {
       case 'edit-counts:update':
         this.editCounts = data.counts || {};
         if (this.visualizer) this.visualizer.setEditCounts(this.editCounts);
+        if (this.neonPulse && this.visualizer) {
+          // Build path→id map for NeonPulse heat sync
+          const pathToId = {};
+          for (const n of (this.visualizer.nodes || [])) pathToId[n.path] = n.id;
+          this.neonPulse.setHeat(this.editCounts, pathToId);
+        }
         this._refreshTreeBadges();
         break;
 
@@ -251,6 +272,13 @@ class App {
       this.visualizer = new Visualizer('graphSvg', 'tooltip');
       this.visualizer.onNodeClick = (node) => this._showNodeDetails(node);
       this.visualizer.onDeselect  = () => this._clearDetails();
+
+      // NeonPulse: Canvas overlay for Neon Pulse Ring heat effect
+      // Must be created after Visualizer so the canvas stacks above the SVG
+      if (typeof NeonPulse !== 'undefined') {
+        this.neonPulse = new NeonPulse('graphContainer', 'graphSvg');
+        this.visualizer.neonPulse = this.neonPulse;
+      }
     }
 
     const display = this.currentView === 'simple'
@@ -620,3 +648,4 @@ class App {
     });
   }
 }
+

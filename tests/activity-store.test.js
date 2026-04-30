@@ -226,3 +226,4 @@ describe('ActivityStore — broadcast calls', () => {
     store.destroy();
   });
 });
+

@@ -276,3 +276,4 @@ const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`\n  \x1b[36m[*] Vibe Guarding running at http://localhost:${PORT}\x1b[0m\n`);
 });
+
