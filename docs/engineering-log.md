@@ -10,21 +10,57 @@
 
 ```
 Name:        Vibe Guarding
-Version:     0.1.0
+Version:     1.4.0
 Stack:       Node.js 22 + Express + WebSocket + chokidar / D3.js v7 + vanilla JS
 Path:        /Users/macos/Desktop/vibe guarding/vibe-guarding/
 Output:      http://localhost:3001
-Size:        7 source files | ~3546 LOC
+Size:        9 source files | ~4100 LOC
 Runtime:     Node 22.22.2
 ```
 
-Real-time visualization tool for AI vibe coding processes. Monitors filesystem changes, renders an interactive dependency graph with force-directed layout, tracks per-file edit heat, and provides PRD comparison.
+Real-time visualization tool for AI vibe coding processes. Monitors filesystem changes, renders an interactive dependency graph with force-directed layout, tracks per-file edit heat, and provides AI agent read monitoring.
 
-**Design language:** Anthropic-inspired — warm cream canvas (#faf9f5), coral primary accent (#cc785c), dark navy product surface (#181715), Cormorant Garamond serif display headlines paired with Inter sans body.
+**Design language:** Dark-themed — warm black surface (#0f0e0d), coral primary accent (#FF6B35), Inter sans + JetBrains Mono code font.
 
 ---
 
-## 2. Architecture & Tech Stack
+## 2. Recent Implementations
+
+### v1.3.0 — F00 Activity Persistence + NeonPulse
+- **ActivityStore**: File-backed edit/read session persistence via `.vibe-guarding-activity.json`
+- **NeonPulse**: SVG-native heat glow overlay (radial gradient auras + expanding pulse rings)
+- Eliminated Canvas overlay, zero coordinate drift via D3 zoom container inheritance
+
+### v1.4.0 — F13 Node Inquiry Agent + F14 Editing Breathing Ring
+- **F13 Layer 1**: Real-time LLM-powered node inquiry via streaming SSE (OpenAI/Anthropic)
+- **F13 Layer 2**: Project knowledge base pre-scanning for structural summaries
+- **F14**: Editing nodes display pulsing outer stroke ring animation
+
+### v1.5.0 — F16 Attention Radar + F18 Minimap Attention Mode
+- **agent-monitor.js**: lsof-based polling engine monitoring AI agent file reads
+  - PID discovery via pgrep, double-check confirmation cycles (2 cycles)
+  - Configurable process name and poll interval via `.vibe-guarding.json`
+  - PID drift recovery with 5s retry loop
+  - Integration with ActivityStore for read count persistence
+- **Reading state visualization**:
+  - Node fill: #7C8CFF (blue-purple, distinct from editing #00D4FF)
+  - Node scale: 1.8x during active reading
+  - Rotating dashed ring + glow filter (stdDeviation=10)
+  - Label auto-visible during read, smooth 800ms fade-out on end
+  - Simultaneous read+edit: cyan base + orange editing glow overlay
+- **Attention Radar panel** (right sidebar):
+  - Active reads with live duration (RAF update loop)
+  - Recent read history (ring buffer, max 10)
+  - Path trace showing Agent navigation trajectory
+- **F18 Minimap Attention Mode**:
+  - Active editing/reading nodes keep color; rest dim to rgba(255,255,255,0.12)
+  - Zero-active state restores full-color minimap
+  - Synced via _refreshNodeColors() for instant minimap updates
+
+### Known Gaps
+- agent-monitor.js requires user-specified process name (default: "Claude")
+- lsof polling limited to macOS (lsof system dependency)
+- No UI toggle for Attention Radar yet (must POST /api/agent/monitor/start)
 
 ```
 Browser ←→ WebSocket ←→ Express Server ←→ chokidar ←→ Target Project FS

@@ -675,6 +675,9 @@ class Visualizer {
     sel.select('.node-label')
       .attr('fill', (d) => this.editingIds.has(d.id) ? this.C_EDITING : 'var(--text-muted)')
       .attr('opacity', (d) => (this.editingIds.has(d.id) || d.type === 'directory') ? 1 : 0);
+
+    // Keep minimap in sync with editing/reading state changes
+    this._updateMinimapDots();
   }
 
   // ─── Hover dim ───
@@ -802,13 +805,23 @@ class Visualizer {
 
     const dots = this._mmDots.selectAll('circle').data(this.nodes, (d) => d.id);
     dots.exit().remove();
+
+    // Attention mode: when any node is being edited or read, dim all non-active dots
+    const hasEditing = this.editingIds.size > 0;
+    const hasReading = this.readingIds.size > 0;
+    const attentionMode = hasEditing || hasReading;
+
     dots.enter().append('circle').merge(dots)
       .attr('cx', (d) => ((d.x ?? 0) - minX) * s + ox)
       .attr('cy', (d) => ((d.y ?? 0) - minY) * s + oy)
       .attr('r', 1.8)
       .attr('fill', (d) => {
-        if (d.id === this.selectedId)                              return '#FF6B35';
-        if (this.editingIds.has(d.id))                             return this.C_EDITING;
+        if (d.id === this.selectedId) return '#FF6B35';
+        if (attentionMode) {
+          if (this.editingIds.has(d.id)) return this.C_EDITING;
+          if (this.readingIds.has(d.id)) return this.C_READING;
+          return 'rgba(255,255,255,0.12)';
+        }
         return this._nodeColor(d);
       });
 
