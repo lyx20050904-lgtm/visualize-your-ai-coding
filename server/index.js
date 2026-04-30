@@ -5,6 +5,7 @@ import { ProjectWatcher } from './file-watcher.js';
 import { ProjectAnalyzer } from './project-analyzer.js';
 import { LlmService } from './llm-service.js';
 import { ProjectKnowledge } from './project-knowledge.js';
+import { ActivityStore } from './activity-store.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
@@ -24,6 +25,7 @@ let watcher = null;
 let analyzer = null;
 let llmService = null;
 let knowledgeBase = null;
+let activityStore = null;
 
 // ─── Broadcast (sync only — no async operations here) ───
 function broadcast(data) {
@@ -57,12 +59,13 @@ app.post('/api/project/open', (req, res) => {
     return res.status(400).json({ error: 'Path is not a directory' });
   }
 
-  // Tear down existing watchers
+  // Tear down existing watchers and store
   if (watcher) watcher.close();
+  if (activityStore) activityStore.destroy();
 
   projectRoot = dirPath;
-  watcher = new ProjectWatcher(dirPath, broadcast);
-  analyzer = new ProjectAnalyzer(dirPath);
+  activityStore = new ActivityStore(dirPath, broadcast);
+  watcher = new ProjectWatcher(dirPath, broadcast, activityStore);
 
   // Initialize LLM service (isolated — never touches broadcast directly)
   llmService = new LlmService(dirPath);
@@ -71,6 +74,7 @@ app.post('/api/project/open', (req, res) => {
   knowledgeBase = new ProjectKnowledge(dirPath);
 
   broadcast({ type: 'project:opened', path: dirPath });
+  broadcast({ type: 'activity:state', data: activityStore.getAll() });
   res.json({ ok: true, path: dirPath });
 
   // Trigger background processes — fire and forget
@@ -123,6 +127,14 @@ app.get('/api/knowledge/status', (req, res) => {
 app.get('/api/llm/logs', (req, res) => {
   if (!llmService) return res.json([]);
   res.json(llmService.getLogs());
+});
+
+// ─── F00: Activity clear ───
+
+app.post('/api/activity/clear', (req, res) => {
+  if (!activityStore) return res.status(400).json({ error: 'No project open' });
+  activityStore.clear();
+  res.json({ ok: true });
 });
 
 // ─── REST: F13 Node Inquiry Agent ───
@@ -245,11 +257,8 @@ wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'project:state', analysis }));
   }
 
-  if (watcher) {
-    ws.send(JSON.stringify({
-      type: 'edit-counts:state',
-      counts: watcher.getEditSessionCounts()
-    }));
+  if (activityStore) {
+    ws.send(JSON.stringify({ type: 'activity:state', data: activityStore.getAll() }));
   }
 
   ws.on('close', () => {

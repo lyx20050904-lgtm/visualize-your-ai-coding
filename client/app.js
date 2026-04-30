@@ -21,6 +21,7 @@ class App {
     this.humanDescriptions = {};
     this.llmDescriptions = {};
     this.editCounts = {};
+    this.readingCounts = {};
 
     this.currentView = 'dev'; // 'dev' | 'simple'
 
@@ -102,11 +103,26 @@ class App {
         this._queueChange(data);
         break;
 
+      case 'activity:state':
+        this.editCounts = data.data?.editCounts || {};
+        this.readingCounts = data.data?.readingCounts || {};
+        if (this.visualizer) {
+          this.visualizer.setEditCounts(this.editCounts);
+          this.visualizer.setReadingCounts(this.readingCounts);
+        }
+        this._refreshTreeBadges();
+        break;
+
       case 'edit-counts:state':
       case 'edit-counts:update':
         this.editCounts = data.counts || {};
         if (this.visualizer) this.visualizer.setEditCounts(this.editCounts);
         this._refreshTreeBadges();
+        break;
+
+      case 'reading-counts:update':
+        this.readingCounts = data.counts || {};
+        if (this.visualizer) this.visualizer.setReadingCounts(this.readingCounts);
         break;
     }
   }
@@ -587,6 +603,13 @@ class App {
 
     document.getElementById('btnClearLog')?.addEventListener('click', () => {
       document.getElementById('logContainer').innerHTML = '';
+    });
+
+    document.getElementById('btnClearActivity')?.addEventListener('click', () => {
+      if (!confirm('Clear all edit and read session counts? This cannot be undone.')) return;
+      fetch('/api/activity/clear', { method: 'POST' }).catch((e) => {
+        LogManager.log('info', 'Clear failed: ' + e.message);
+      });
     });
 
     document.getElementById('btnToggleLog')?.addEventListener('click', () => {

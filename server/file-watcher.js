@@ -16,9 +16,10 @@ const IGNORE_PATTERNS = [
 const SESSION_DEBOUNCE_MS = 2500;
 
 export class ProjectWatcher {
-  constructor(root, broadcast) {
+  constructor(root, broadcast, activityStore) {
     this.root = root;
     this.broadcast = broadcast;
+    this.activityStore = activityStore || null;
 
     // Debounce timers for file events (structural: add/delete)
     this.debounceTimers = new Map();
@@ -107,14 +108,21 @@ export class ProjectWatcher {
 
     this.editingFiles.delete(relative);
 
-    // Increment session count
+    // Increment local memory count
     this.editSessionCounts[relative] = (this.editSessionCounts[relative] || 0) + 1;
 
+    // Delegate persistence to activity store (handles broadcast + file write)
+    if (this.activityStore) {
+      this.activityStore.recordEdit(relative);
+    } else {
+      // Fallback: direct broadcast if no activity store available
+      this.broadcast({
+        type: 'edit-counts:update',
+        counts: { ...this.editSessionCounts }
+      });
+    }
+
     this.broadcast({ type: 'agent:editing-end', path: relative });
-    this.broadcast({
-      type: 'edit-counts:update',
-      counts: { ...this.editSessionCounts }
-    });
 
     console.log(chalk.gray(
       `  ✓ editing-end: ${relative} (session #${this.editSessionCounts[relative]})`

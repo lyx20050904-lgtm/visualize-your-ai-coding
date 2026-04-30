@@ -38,6 +38,7 @@ class Visualizer {
     this.selectedId     = null;
     this.editingIds     = new Set();
     this.editCounts     = {};
+    this.readingCounts  = {};
     this._maxCount      = 1;
     this.descriptions   = {};
 
@@ -193,6 +194,10 @@ class Visualizer {
     this.editCounts = counts || {};
     this._maxCount  = Math.max(1, ...Object.values(this.editCounts));
     this._heatDirty = true;
+  }
+
+  setReadingCounts(counts) {
+    this.readingCounts = counts || {};
   }
 
   // F06: bulk heat refresh every 30s — reduces DOM churn
