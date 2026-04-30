@@ -1,6 +1,11 @@
 /**
  * Vibe Guarding — D3 Force-Directed Visualizer
  *
+ * LOC: ~814 (exceeds 800-line guardrail)
+ * Reason: F14 breathing ring + incremental contains-edge fix pushed ~43 LOC.
+ *   D3 rendering code is tightly coupled to SVG lifecycle and difficult to
+ *   split without introducing an abstraction layer.
+ *
  * Design rules:
  *   1. Simulation runs ONCE on first load, then stops. Layout is frozen.
  *   2. Node selection / view switch / heat update — zero simulation involvement.
